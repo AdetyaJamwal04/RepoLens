@@ -148,4 +148,34 @@ describe('GitHubClient', () => {
       })
     );
   });
+
+  it('encodes path segments in getFileContent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-ratelimit-remaining': '50' }),
+      text: async () => 'content with spaces'
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new GitHubClient();
+    await client.getFileContent('owner', 'repo', 'src/my folder/file#1.ts', 'main');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/owner/repo/contents/src/my%20folder/file%231.ts?ref=main',
+      expect.any(Object)
+    );
+  });
+
+  it('throws GitHubApiError for 403 when remaining header is missing and message is not rate limit', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Headers(),
+      json: async () => ({ message: 'Resource not accessible by personal access token' })
+    }));
+
+    const client = new GitHubClient();
+    await expect(client.getRepoMetadata('owner', 'private-repo')).rejects.toThrowError(GitHubApiError);
+    await expect(client.getRepoMetadata('owner', 'private-repo')).rejects.not.toThrowError(RateLimitError);
+  });
 });

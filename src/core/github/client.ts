@@ -60,6 +60,7 @@ export class GitHubClient {
     if (!response.ok) {
       let remaining = 0;
       let resetTimestamp = 0;
+      let hasRemainingHeader = false;
 
       if (response.headers) {
         if (typeof response.headers.get === 'function') {
@@ -67,6 +68,7 @@ export class GitHubClient {
           const resetHeader = response.headers.get('x-ratelimit-reset');
           if (remainingHeader !== null && remainingHeader !== undefined) {
             remaining = parseInt(remainingHeader, 10);
+            hasRemainingHeader = true;
           }
           if (resetHeader !== null && resetHeader !== undefined) {
             resetTimestamp = parseInt(resetHeader, 10);
@@ -75,6 +77,7 @@ export class GitHubClient {
           const headersObj = response.headers as unknown as Record<string, string | undefined>;
           if (headersObj['x-ratelimit-remaining'] !== undefined) {
             remaining = parseInt(headersObj['x-ratelimit-remaining'] as string, 10);
+            hasRemainingHeader = true;
           }
           if (headersObj['x-ratelimit-reset'] !== undefined) {
             resetTimestamp = parseInt(headersObj['x-ratelimit-reset'] as string, 10);
@@ -94,7 +97,8 @@ export class GitHubClient {
 
       if (
         response.status === 429 ||
-        (response.status === 403 && (remaining === 0 || message.toLowerCase().includes('rate limit')))
+        (response.status === 403 &&
+          ((hasRemainingHeader && remaining === 0) || message.toLowerCase().includes('rate limit')))
       ) {
         throw new RateLimitError(message, remaining, resetTimestamp);
       }
@@ -153,7 +157,11 @@ export class GitHubClient {
   }
 
   async getFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
-    const cleanPath = path.replace(/^\/+/, '');
+    const cleanPath = path
+      .replace(/^\/+/, '')
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/');
     const url = ref
       ? `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${cleanPath}?ref=${encodeURIComponent(ref)}`
       : `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${cleanPath}`;
