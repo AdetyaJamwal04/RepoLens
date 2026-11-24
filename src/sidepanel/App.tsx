@@ -86,29 +86,29 @@ export function buildCachedRepoIndex(
   const languages = new Set<string>();
 
   if (cached.overview) {
-    for (const tech of cached.overview.technologies) {
+    for (const tech of cached.overview.technologies ?? []) {
       if (tech.evidence?.filePath) {
         pathSet.add(tech.evidence.filePath);
         if (tech.evidence.type === 'manifest' || isManifest(tech.evidence.filePath)) {
           manifests.add(tech.evidence.filePath);
         }
       }
-      if (tech.category.toLowerCase().includes('lang')) {
+      if ((tech.category ?? '').toLowerCase().includes('lang')) {
         languages.add(tech.name);
       }
     }
-    for (const mod of cached.overview.keyModules) {
+    for (const mod of cached.overview.keyModules ?? []) {
       if (mod.path) pathSet.add(mod.path);
     }
   }
 
   if (cached.architecture) {
-    for (const comp of cached.architecture.components) {
-      for (const file of comp.importantFiles) {
+    for (const comp of cached.architecture.components ?? []) {
+      for (const file of comp.importantFiles ?? []) {
         if (file) pathSet.add(file);
       }
     }
-    for (const step of cached.architecture.executionFlow) {
+    for (const step of cached.architecture.executionFlow ?? []) {
       if (step.sourceReference?.filePath) {
         pathSet.add(step.sourceReference.filePath);
         entryPoints.add(step.sourceReference.filePath);
@@ -118,7 +118,7 @@ export function buildCachedRepoIndex(
 
   const treeItems: Array<{ path: string; mode: string; type: 'blob' | 'tree'; sha: string }> = [];
   if (cached.explorer) {
-    for (const entry of cached.explorer.entries) {
+    for (const entry of cached.explorer.entries ?? []) {
       if (!entry.path) continue;
       treeItems.push({
         path: entry.path,
@@ -196,6 +196,66 @@ export async function fetchBoundedContents(
   return results;
 }
 
+export interface ErrorBoundaryProps {
+  resetKey?: string;
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string | null;
+}
+
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, errorMessage: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return {
+      hasError: true,
+      errorMessage:
+        error instanceof Error ? error.message : 'An unexpected rendering error occurred.',
+    };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo): void {
+    console.error('[RepoLens] UI render error:', error, info);
+  }
+
+  componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, errorMessage: null });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <main
+          className="flex flex-1 flex-col items-center justify-center p-6 text-center"
+          role="alert"
+        >
+          <AlertTriangle className="h-6 w-6 text-rose-400" aria-hidden="true" />
+          <h2 className="mt-3 text-sm font-semibold text-zinc-100">Something went wrong</h2>
+          <p className="mt-1 max-w-xs text-xs text-zinc-400">
+            {this.state.errorMessage || 'An unexpected error occurred while rendering this view.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, errorMessage: null })}
+            className="mt-3 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
+          >
+            Try Again
+          </button>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App({
   initialIdentity,
   initialOverview = null,
@@ -225,6 +285,8 @@ export function App({
   const [overview, setOverview] = useState<OverviewOutput | null>(initialOverview);
   const [architecture, setArchitecture] = useState<ArchitectureOutput | null>(initialArchitecture);
   const [explorer, setExplorer] = useState<CodebaseExplorerOutput | null>(initialExplorer);
+  const [readmeSummary, setReadmeSummary] = useState<string>('');
+  const [manifestContents, setManifestContents] = useState<Record<string, string>>({});
   const [githubLinkRef, setGithubLinkRef] = useState<string>(
     initialIdentity?.commitSha || initialIdentity?.branch || initialIndex?.defaultBranch || 'main'
   );
@@ -269,6 +331,8 @@ export function App({
       setOverview(null);
       setArchitecture(null);
       setExplorer(null);
+      setReadmeSummary('');
+      setManifestContents({});
       setChatMessages([]);
       setErrorMessage(null);
       setRateLimitError(null);
@@ -288,6 +352,8 @@ export function App({
             if (cached.overview) setOverview(cached.overview);
             if (cached.architecture) setArchitecture(cached.architecture);
             if (cached.explorer) setExplorer(cached.explorer);
+            if (cached.readmeSummary) setReadmeSummary(cached.readmeSummary);
+            if (cached.manifestContents) setManifestContents(cached.manifestContents);
             if (cached.overview && cached.architecture && cached.explorer) {
               setIsFromCache(true);
               setStatus('ready');
@@ -388,13 +454,17 @@ export function App({
         if (isStale()) return;
 
         const targetRef = identity.commitSha || identity.branch || metadata.defaultBranch || 'main';
-        const treeRes = await client.getTree(identity.owner, identity.repo, targetRef);
+        const [treeRes, resolvedSha] = await Promise.all([
+          client.getTree(identity.owner, identity.repo, targetRef),
+          identity.commitSha
+            ? Promise.resolve(identity.commitSha)
+            : client.getCommitSha(identity.owner, identity.repo, targetRef),
+        ]);
         if (isStale()) return;
 
         setIsTreeTruncated(treeRes.truncated);
 
-        const resolvedSha = identity.commitSha || treeRes.sha || targetRef;
-        const linkRef = identity.commitSha || identity.branch || metadata.defaultBranch || 'main';
+        const linkRef = resolvedSha || identity.branch || metadata.defaultBranch || 'main';
         setGithubLinkRef(linkRef);
 
         const resolvedIdentity: RepoIdentity = {
@@ -410,6 +480,9 @@ export function App({
           ? null
           : await repoCache.get(identity.owner, identity.repo, resolvedSha);
         if (isStale()) return;
+
+        if (cached?.readmeSummary) setReadmeSummary(cached.readmeSummary);
+        if (cached?.manifestContents) setManifestContents(cached.manifestContents);
 
         if (cached && cached.overview && cached.architecture && cached.explorer) {
           setOverview(cached.overview);
@@ -433,9 +506,16 @@ export function App({
         let stage1Overview = cached?.overview;
         if (!stage1Overview) {
           setStageMessage('Stage 1/3: Generating project overview and tech stack...');
-          const readmeItem = treeRes.tree.find(
-            (item) => item.type === 'blob' && isReadme(item.path)
-          );
+          const readmeItem = [...treeRes.tree]
+            .filter((item) => item.type === 'blob' && isReadme(item.path))
+            .sort((a, b) => {
+              const depthDiff = a.path.split('/').length - b.path.split('/').length;
+              if (depthDiff !== 0) return depthDiff;
+              const aIsMd = a.path.toLowerCase().endsWith('.md') ? 0 : 1;
+              const bIsMd = b.path.toLowerCase().endsWith('.md') ? 0 : 1;
+              if (aIsMd !== bIsMd) return aIsMd - bIsMd;
+              return a.path.localeCompare(b.path);
+            })[0];
           const manifestPaths = index.manifests.slice(0, 5);
           const filesToFetch = readmeItem ? [readmeItem.path, ...manifestPaths] : manifestPaths;
           const fetchedStage1 = await fetchBoundedContents(
@@ -448,19 +528,29 @@ export function App({
           if (isStale()) return;
 
           const readmeContent = readmeItem ? fetchedStage1[readmeItem.path] ?? '' : '';
-          const manifestContents: Record<string, string> = {};
+          const stage1ManifestContents: Record<string, string> = {};
           for (const mPath of manifestPaths) {
             if (fetchedStage1[mPath] !== undefined) {
-              manifestContents[mPath] = fetchedStage1[mPath];
+              stage1ManifestContents[mPath] = fetchedStage1[mPath];
             }
           }
 
-          stage1Overview = await engine.runStage1Overview(index, readmeContent, manifestContents);
+          const boundedReadmeForQA = readmeContent.slice(0, 3000);
+          setReadmeSummary(boundedReadmeForQA);
+          setManifestContents(stage1ManifestContents);
+
+          stage1Overview = await engine.runStage1Overview(
+            index,
+            readmeContent,
+            stage1ManifestContents
+          );
           if (isStale()) return;
           setOverview(stage1Overview);
           await repoCache.set(identity.owner, identity.repo, resolvedSha, {
             repoIndex: index,
             overview: stage1Overview,
+            readmeSummary: boundedReadmeForQA,
+            manifestContents: stage1ManifestContents,
           });
         } else {
           setOverview(stage1Overview);
@@ -542,9 +632,10 @@ export function App({
   );
 
   const hasAnalysis = Boolean(overview || architecture || explorer);
+  const hasFullAnalysis = Boolean(overview && architecture && explorer);
 
   const handleHeaderAnalyze = () => {
-    void runAnalysis(hasAnalysis);
+    void runAnalysis(hasFullAnalysis);
   };
 
   const handleSettingsSaved = (updated: UserSettings) => {
@@ -573,6 +664,7 @@ export function App({
         stageMessage={stageMessage}
         isFromCache={isFromCache}
         hasAnalysis={hasAnalysis}
+        hasFullAnalysis={hasFullAnalysis}
         onAnalyze={handleHeaderAnalyze}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -654,15 +746,17 @@ export function App({
       )}
 
       {!identity ? (
-        <main className="flex flex-1 flex-col items-center justify-center p-6 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-indigo-400">
-            <Compass className="h-6 w-6" aria-hidden="true" />
-          </div>
-          <h2 className="mt-4 text-sm font-semibold text-zinc-100">No Repository Detected</h2>
-          <p className="mt-1.5 max-w-xs text-xs leading-relaxed text-zinc-400">
-            Navigate to a GitHub repository to begin analysis.
-          </p>
-        </main>
+        <ErrorBoundary resetKey="empty">
+          <main className="flex flex-1 flex-col items-center justify-center p-6 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-indigo-400">
+              <Compass className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <h2 className="mt-4 text-sm font-semibold text-zinc-100">No Repository Detected</h2>
+            <p className="mt-1.5 max-w-xs text-xs leading-relaxed text-zinc-400">
+              Navigate to a GitHub repository to begin analysis.
+            </p>
+          </main>
+        </ErrorBoundary>
       ) : (
         <>
           <nav
@@ -693,86 +787,93 @@ export function App({
             })}
           </nav>
 
-          <main className="flex-1 overflow-y-auto p-3.5" role="tabpanel">
-            {status === 'idle' && !hasAnalysis && activeTab !== 'ask' && !missingApiKeyWarning && (
-              <div className="mb-3 flex items-center gap-2 rounded-lg border border-zinc-800/90 bg-zinc-900/50 px-3 py-2 text-[11px] text-zinc-400">
-                <GitBranch className="h-3.5 w-3.5 shrink-0 text-indigo-400" aria-hidden="true" />
-                <span>
-                  Selected repository context is sent to{' '}
-                  <span className="font-medium text-zinc-200">
-                    {settings.aiProvider === 'openai' ? 'OpenAI' : 'Google Gemini'}
-                  </span>{' '}
-                  (<span className="font-mono">{activeModel}</span>) when you click Analyze.
-                </span>
-              </div>
-            )}
+          <ErrorBoundary resetKey={`${formatRepoKey(identity)}:${activeTab}`}>
+            <main className="flex-1 overflow-y-auto p-3.5" role="tabpanel">
+              {status === 'idle' && !hasAnalysis && activeTab !== 'ask' && !missingApiKeyWarning && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-zinc-800/90 bg-zinc-900/50 px-3 py-2 text-[11px] text-zinc-400">
+                  <GitBranch className="h-3.5 w-3.5 shrink-0 text-indigo-400" aria-hidden="true" />
+                  <span>
+                    Selected repository context is sent to{' '}
+                    <span className="font-medium text-zinc-200">
+                      {settings.aiProvider === 'openai' ? 'OpenAI' : 'Google Gemini'}
+                    </span>{' '}
+                    (<span className="font-mono">{activeModel}</span>) when you click Analyze.
+                  </span>
+                </div>
+              )}
 
-            {activeTab === 'overview' && (
-              <OverviewTab
-                overview={overview}
-                owner={identity.owner}
-                repo={identity.repo}
-                gitRef={githubLinkRef}
-                status={status}
-                onAnalyze={() => void runAnalysis(false)}
-              />
-            )}
-
-            {activeTab === 'architecture' && (
-              <ArchitectureTab
-                key={formatRepoKey(identity)}
-                architecture={architecture}
-                owner={identity.owner}
-                repo={identity.repo}
-                gitRef={githubLinkRef}
-                status={status}
-              />
-            )}
-
-            {activeTab === 'explorer' && (
-              <CodebaseExplorerTab
-                key={formatRepoKey(identity)}
-                explorer={explorer}
-                owner={identity.owner}
-                repo={identity.repo}
-                gitRef={githubLinkRef}
-                treeOutline={repoIndex?.treeOutline}
-                status={status}
-              />
-            )}
-
-            {activeTab === 'flow' && (
-              <ExecutionFlowTab
-                steps={architecture?.executionFlow ?? []}
-                owner={identity.owner}
-                repo={identity.repo}
-                gitRef={githubLinkRef}
-                commitSha={repoIndex?.commitSha}
-                status={status}
-              />
-            )}
-
-            {activeTab === 'ask' && (() => {
-              const currentKey = formatRepoKey(identity);
-              return (
-                <AskRepositoryTab
-                  key={currentKey}
-                  repoIndex={repoIndex}
+              {activeTab === 'overview' && (
+                <OverviewTab
                   overview={overview}
-                  architecture={architecture}
-                  settings={settings}
+                  owner={identity.owner}
+                  repo={identity.repo}
                   gitRef={githubLinkRef}
-                  onOpenSettings={() => setIsSettingsOpen(true)}
-                  messages={chatMessages}
-                  onMessagesChange={(next) => {
-                    if (lastRepoKeyRef.current === currentKey) {
-                      setChatMessages(next);
-                    }
-                  }}
+                  status={status}
+                  onAnalyze={() => void runAnalysis(false)}
                 />
-              );
-            })()}
-          </main>
+              )}
+
+              {activeTab === 'architecture' && (
+                <ArchitectureTab
+                  key={formatRepoKey(identity)}
+                  architecture={architecture}
+                  owner={identity.owner}
+                  repo={identity.repo}
+                  gitRef={githubLinkRef}
+                  status={status}
+                />
+              )}
+
+              {activeTab === 'explorer' && (
+                <CodebaseExplorerTab
+                  key={formatRepoKey(identity)}
+                  explorer={explorer}
+                  owner={identity.owner}
+                  repo={identity.repo}
+                  gitRef={githubLinkRef}
+                  treeOutline={repoIndex?.treeOutline}
+                  status={status}
+                />
+              )}
+
+              {activeTab === 'flow' && (
+                <ExecutionFlowTab
+                  steps={architecture?.executionFlow ?? []}
+                  owner={identity.owner}
+                  repo={identity.repo}
+                  gitRef={githubLinkRef}
+                  commitSha={repoIndex?.commitSha}
+                  status={status}
+                />
+              )}
+
+              {(() => {
+                const currentKey = formatRepoKey(identity);
+                return (
+                  <div className={activeTab === 'ask' ? 'flex-1 flex flex-col' : 'hidden'}>
+                    <AskRepositoryTab
+                      key={currentKey}
+                      repoIndex={repoIndex}
+                      overview={overview}
+                      architecture={architecture}
+                      explorer={explorer}
+                      readmeSummary={readmeSummary}
+                      manifestContents={manifestContents}
+                      settings={settings}
+                      gitRef={githubLinkRef}
+                      onOpenSettings={() => setIsSettingsOpen(true)}
+                      messages={chatMessages}
+                      onMessagesChange={(next) => {
+                        if (lastRepoKeyRef.current === currentKey) {
+                          setChatMessages(next);
+                        }
+                      }}
+                    />
+                  </div>
+                );
+              })()}
+            </main>
+          </ErrorBoundary>
         </>
       )}
 

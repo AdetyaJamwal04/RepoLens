@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AnalysisEngine } from '../../../src/core/ai/engine';
-import { AIProvider, ChatMessage, OverviewOutput, ArchitectureOutput, CodebaseExplorerOutput } from '../../../src/core/ai/types';
+import {
+  AnalysisEngine,
+  validateOverviewOutput,
+  validateArchitectureOutput,
+  validateExplorerOutput,
+} from '../../../src/core/ai/engine';
+import {
+  AIProvider,
+  AIProviderError,
+  ChatMessage,
+  OverviewOutput,
+  ArchitectureOutput,
+  CodebaseExplorerOutput,
+} from '../../../src/core/ai/types';
 import { RepoIndex } from '../../../src/core/indexer/indexer';
 
 describe('AnalysisEngine', () => {
@@ -260,6 +272,154 @@ describe('AnalysisEngine', () => {
       expect(systemInstruction).toContain('outside the analyzed slice');
       expect(systemInstruction).toContain('<repository_data>');
       expect(systemInstruction).toContain(sampleIndex.treeOutline);
+    });
+
+    it('includes bounded manifest contents, readme summary, and explorer summary in Q&A context', async () => {
+      vi.mocked(mockProvider.streamChat).mockResolvedValue('Grounded answer');
+
+      await engine.askQuestion(
+        sampleIndex,
+        {
+          overview: sampleOverview,
+          architecture: sampleArchitecture,
+          explorer: sampleExplorer,
+          readmeSummary: 'A'.repeat(4000),
+          manifestContents: {
+            'package.json': '{"name":"react","scripts":{"test":"vitest"}}',
+          },
+        },
+        [{ role: 'user', content: 'How do I run tests?' }],
+        () => {}
+      );
+
+      const [, , systemInstruction] = vi.mocked(mockProvider.streamChat).mock.calls[0];
+      expect(systemInstruction).toContain('README Summary:');
+      expect(systemInstruction).toContain('... [truncated]');
+      expect(systemInstruction).toContain('Manifest Path: package.json');
+      expect(systemInstruction).toContain('Codebase Explorer Summary:');
+      expect(systemInstruction).toContain('src/index.ts (file, critical)');
+    });
+  });
+
+  describe('Runtime output validation and normalization', () => {
+    it('defaults missing or non-array fields to empty arrays across all 3 stages', () => {
+      const overview = validateOverviewOutput(
+        {
+          purpose: 'Valid purpose',
+          technologies: null,
+          keyModules: 'invalid',
+        },
+        sampleIndex
+      );
+      expect(overview).toEqual({
+        purpose: 'Valid purpose',
+        technologies: [],
+        keyModules: [],
+        executionSummary: '',
+        observations: [],
+      });
+
+      const arch = validateArchitectureOutput(
+        {
+          pattern: 'Layered',
+          components: [{ id: 'core', name: 'Core', importantFiles: null, dependencies: 'bad' }],
+          dataFlow: null,
+          externalIntegrations: 123,
+          executionFlow: null,
+        },
+        sampleIndex
+      );
+      expect(arch.components).toEqual([
+        {
+          id: 'core',
+          name: 'Core',
+          responsibility: '',
+          importantFiles: [],
+          dependencies: [],
+        },
+      ]);
+      expect(arch.dataFlow).toEqual([]);
+      expect(arch.externalIntegrations).toEqual([]);
+      expect(arch.executionFlow).toEqual([]);
+
+      const explorer = validateExplorerOutput({ entries: 'not-an-array' }, sampleIndex);
+      expect(explorer).toEqual({ entries: [] });
+    });
+
+    it('downgrades unverified filePath citations not in treeOutline/index to inferred or unknown', () => {
+      const overview = validateOverviewOutput(
+        {
+          purpose: 'Test',
+          technologies: [
+            {
+              name: 'VerifiedLib',
+              category: 'Lib',
+              evidence: {
+                filePath: 'package.json',
+                commitSha: 'abc1234',
+                type: 'manifest',
+                confidence: 'verified',
+              },
+            },
+            {
+              name: 'HallucinatedLib',
+              category: 'Lib',
+              evidence: {
+                filePath: 'nonexistent/secret.ts',
+                commitSha: 'abc1234',
+                type: 'source',
+                confidence: 'verified',
+              },
+            },
+            {
+              name: 'EmptyPathLib',
+              category: 'Lib',
+              evidence: {
+                filePath: '',
+                commitSha: 'abc1234',
+                type: 'source',
+                confidence: 'verified',
+              },
+            },
+          ],
+        },
+        sampleIndex
+      );
+
+      expect(overview.technologies[0].evidence.confidence).toBe('verified');
+      expect(overview.technologies[1].evidence.confidence).toBe('inferred');
+      expect(overview.technologies[2].evidence.confidence).toBe('unknown');
+
+      const arch = validateArchitectureOutput(
+        {
+          pattern: 'Modular',
+          executionFlow: [
+            {
+              stepNumber: 1,
+              title: 'Ghost Step',
+              description: 'Calls missing file',
+              sourceReference: {
+                filePath: 'does/not/exist.ts',
+                commitSha: 'abc1234',
+                type: 'source',
+                confidence: 'verified',
+              },
+              confidence: 'verified',
+            },
+          ],
+        },
+        sampleIndex
+      );
+      expect(arch.executionFlow[0].sourceReference.confidence).toBe('inferred');
+      expect(arch.executionFlow[0].confidence).toBe('inferred');
+    });
+
+    it('throws typed AIProviderError when output is unparseable or missing core fields', () => {
+      expect(() => validateOverviewOutput('not-json', sampleIndex)).toThrow(AIProviderError);
+      expect(() => validateOverviewOutput(null, sampleIndex)).toThrow(AIProviderError);
+      expect(() => validateOverviewOutput({}, sampleIndex)).toThrow(AIProviderError);
+      expect(() => validateArchitectureOutput({}, sampleIndex)).toThrow(AIProviderError);
+      expect(() => validateExplorerOutput([], sampleIndex)).toThrow(AIProviderError);
     });
   });
 });

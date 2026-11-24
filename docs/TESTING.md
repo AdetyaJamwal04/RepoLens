@@ -4,7 +4,7 @@
 
 RepoLens uses **Vitest** (`vitest run`) for fast, deterministic unit and integration testing without requiring a live GitHub account, paid LLM API keys, or `jsdom`.
 
-- **Total Automated Coverage:** **77 tests across 9 test files**
+- **Total Automated Coverage:** **89 tests across 10 test files**
 - **Mocking Strategy:**
   - Network calls (`fetch`) are stubbed with `vi.stubGlobal('fetch', ...)` and deterministic SSE `ReadableStream` fixtures.
   - Extension storage (`chrome.storage.local`) is tested both against the in-memory fallback and a mocked `chrome.storage.local` adapter.
@@ -20,7 +20,7 @@ Run these commands from the repository root:
 # 1. Production build (generates dist/ with MV3 manifest, background.js, content.js, sidepanel/)
 npm run build
 
-# 2. Full automated test suite (runs pretest build + all 9 Vitest files)
+# 2. Full automated test suite (runs pretest build + all 10 Vitest files)
 npm test
 
 # 3. TypeScript strict type checking (0 errors expected)
@@ -33,15 +33,16 @@ npx tsc --noEmit
 
 | Test File | Tests | Scope Verified |
 |---|---|---|
-| [tests/build.test.ts](../tests/build.test.ts) | 1 | Verifies `dist/manifest.json` (`manifest_version: 3`, `side_panel.default_path`), `dist/background.js`, `dist/sidepanel/index.html`, and that `dist/content.js` is a standalone classic script with no top-level ES `import` statements. |
+| [tests/build.test.ts](../tests/build.test.ts) | 1 | Verifies `dist/manifest.json` (`manifest_version: 3`, `side_panel.default_path`, `host_permissions`), `dist/background.js`, `dist/sidepanel/index.html`, and that `dist/content.js` is a standalone classic script with no top-level ES `import` statements. |
+| [tests/background/index.test.ts](../tests/background/index.test.ts) | 3 | Verifies background service worker `GET_CURRENT_REPO` active/requested tab URL re-validation, stale state cleanup on navigation away from GitHub, and `REPO_DETECTED` sender URL validation. |
 | [tests/core/github/url-parser.test.ts](../tests/core/github/url-parser.test.ts) | 6 | Verifies `parseGitHubUrl` on repo roots, trailing slashes, `tree/` and `blob/` paths, 40-char commit SHAs, `pull`/`issues` pages, and non-repo/non-GitHub URLs. |
-| [tests/core/github/client.test.ts](../tests/core/github/client.test.ts) | 9 | Verifies `GitHubClient` Bearer token headers, unauthenticated requests, `RateLimitError` (403/429 with remaining/reset), `NotFoundError` (404), `GitHubApiError` (500), `getTree` truncation detection, and `getFileContent` path encoding. |
-| [tests/core/indexer/indexer.test.ts](../tests/core/indexer/indexer.test.ts) | 14 | Verifies `isExcluded` (build dirs, binaries, lockfiles, `.env*` secrets vs `.env.example`), `isManifest`, `isCandidateEntryPoint`, `prioritizeTree`, `detectLanguages`, `generateTreeOutline`, and `buildRepoIndex` / `extractRepoIndex`. |
-| [tests/core/ai/engine.test.ts](../tests/core/ai/engine.test.ts) | 7 | Verifies `AnalysisEngine` Stages 1–3, `<repository_data>` delimiters, literal `</repository_data>` tag escaping, `SYSTEM_SECURITY_INSTRUCTION`, JSON schema passing, and `askQuestion` streaming & out-of-slice instructions. |
-| [tests/core/ai/providers.test.ts](../tests/core/ai/providers.test.ts) | 8 | Verifies `GeminiProvider` and `OpenAIProvider` structured JSON calls, SSE streaming chunks, role translation (`assistant` -> `model`), and `AIProviderError` mapping (401/403, 429, 5xx). |
+| [tests/core/github/client.test.ts](../tests/core/github/client.test.ts) | 10 | Verifies `GitHubClient` Bearer token headers, unauthenticated requests, `getCommitSha`, `RateLimitError` (403/429 with remaining/reset), `NotFoundError` (404), `GitHubApiError` (500), `getTree` truncation detection, and `getFileContent` path encoding. |
+| [tests/core/indexer/indexer.test.ts](../tests/core/indexer/indexer.test.ts) | 15 | Verifies `isExcluded` (build dirs, binaries, lockfiles, `.env*` secrets vs `.env.example`, private keys/credentials), `isManifest`, `isCandidateEntryPoint`, `prioritizeTree`, `detectLanguages`, `generateTreeOutline`, and `buildRepoIndex` / `extractRepoIndex`. |
+| [tests/core/ai/engine.test.ts](../tests/core/ai/engine.test.ts) | 11 | Verifies `AnalysisEngine` Stages 1–3, `<repository_data>` delimiters, literal `</repository_data>` tag escaping, `SYSTEM_SECURITY_INSTRUCTION`, runtime validation/citation checking (`validateOverviewOutput`, `validateArchitectureOutput`, `validateExplorerOutput`), and `askQuestion` streaming & grounded context. |
+| [tests/core/ai/providers.test.ts](../tests/core/ai/providers.test.ts) | 8 | Verifies `GeminiProvider` (`x-goog-api-key` header) and `OpenAIProvider` structured JSON calls, SSE streaming chunks, role translation (`assistant` -> `model`), and `AIProviderError` mapping (401/403, 429, 5xx). |
 | [tests/core/storage/cache.test.ts](../tests/core/storage/cache.test.ts) | 9 | Verifies `RepoCache` key formatting (`owner/repo:commitSha`), commit-SHA mismatch rejection, partial stage merging, repo-scoped clearing, and `chrome.storage.local` adapter behavior. |
 | [tests/core/storage/settings.test.ts](../tests/core/storage/settings.test.ts) | 5 | Verifies `SettingsStore` defaults (`gemini-1.5-flash`, `gpt-4o-mini`), partial saves, `clearSettings`, and `chrome.storage.local` persistence under `repolens:settings`. |
-| [tests/sidepanel/App.test.tsx](../tests/sidepanel/App.test.tsx) | 18 | Verifies empty state, active repo header/tabs, all 5 tabs (`Overview`, `Architecture`, `Explorer`, `Flow`, `Ask AI`), `SettingsModal` save/cancel, missing API key & rate limit banners, `fetchBoundedContents` `RateLimitError` propagation, commit-URL cache hydration, stale stream cancellation on repo switch/unmount, and `javascript:`/`data:` XSS blocking. |
+| [tests/sidepanel/App.test.tsx](../tests/sidepanel/App.test.tsx) | 21 | Verifies empty state, active repo header/tabs, all 5 tabs, `SettingsModal` save/cancel, banners, `fetchBoundedContents`, commit-URL cache hydration, `getCommitSha` + root README preference + partial-cache Refresh resume, persistent `AskRepositoryTab` across tab switches, defensive UI guards, `ErrorBoundary`, and XSS blocking. |
 
 ---
 

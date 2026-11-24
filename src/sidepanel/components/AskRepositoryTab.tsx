@@ -7,6 +7,7 @@ import {
   AIProviderError,
   ArchitectureOutput,
   ChatMessage,
+  CodebaseExplorerOutput,
   OverviewOutput,
 } from '../../core/ai/types';
 import type { RepoIndex } from '../../core/indexer/indexer';
@@ -23,6 +24,9 @@ export interface AskRepositoryTabProps {
   repoIndex: RepoIndex | null;
   overview: OverviewOutput | null;
   architecture: ArchitectureOutput | null;
+  explorer?: CodebaseExplorerOutput | null;
+  readmeSummary?: string;
+  manifestContents?: Record<string, string>;
   settings: UserSettings;
   gitRef: string;
   onOpenSettings: () => void;
@@ -40,6 +44,9 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
   repoIndex,
   overview,
   architecture,
+  explorer,
+  readmeSummary,
+  manifestContents,
   settings,
   gitRef,
   onOpenSettings,
@@ -52,7 +59,7 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
   const [streamingContent, setStreamingContent] = useState('');
   const [chatError, setChatError] = useState<string | null>(null);
 
-  const messages = controlledMessages ?? internalMessages;
+  const messages = controlledMessages ?? internalMessages ?? [];
   const updateMessages = (next: ChatMessage[]) => {
     if (onMessagesChange) {
       onMessagesChange(next);
@@ -95,9 +102,9 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
   const knownFiles = useMemo(() => {
     const set = new Set<string>();
     if (!repoIndex) return set;
-    for (const p of repoIndex.manifests) set.add(p);
-    for (const p of repoIndex.candidateEntryPoints) set.add(p);
-    for (const p of repoIndex.prioritizedFiles) set.add(p);
+    for (const p of repoIndex.manifests ?? []) set.add(p);
+    for (const p of repoIndex.candidateEntryPoints ?? []) set.add(p);
+    for (const p of repoIndex.prioritizedFiles ?? []) set.add(p);
     return set;
   }, [repoIndex]);
 
@@ -251,6 +258,9 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
         {
           overview: overview ?? undefined,
           architecture: architecture ?? undefined,
+          explorer: explorer ?? undefined,
+          readmeSummary,
+          manifestContents,
         },
         nextHistory,
         (chunk) => {
@@ -292,7 +302,7 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
           </h2>
           <p className="text-[11px] text-zinc-500">
             Grounded in the analyzed repository slice
-            {repoIndex ? ` (${repoIndex.prioritizedFiles.length} prioritized files)` : ''}.
+            {repoIndex ? ` (${(repoIndex.prioritizedFiles ?? []).length} prioritized files)` : ''}.
           </p>
         </div>
 

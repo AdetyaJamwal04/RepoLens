@@ -8,6 +8,8 @@ export interface CachedAnalysis {
   overview?: OverviewOutput;
   architecture?: ArchitectureOutput;
   explorer?: CodebaseExplorerOutput;
+  readmeSummary?: string;
+  manifestContents?: Record<string, string>;
 }
 
 const memoryFallback = new Map<string, CachedAnalysis>();

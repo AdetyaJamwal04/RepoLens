@@ -52,6 +52,9 @@ export const LOCKFILES = new Set([
   'gemfile.lock',
 ]);
 
+const SECRET_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx']);
+const SECRET_FILENAMES = new Set(['id_rsa', '.npmrc', '.pypirc', 'credentials.json']);
+
 export const MANIFEST_FILES = new Set([
   'package.json',
   'pyproject.toml',
@@ -139,8 +142,12 @@ export function isExcluded(path: string, type?: 'blob' | 'tree'): boolean {
     return EXCLUDED_DIRS.has(lowerFilename);
   }
 
-  // Check secrets (.env* except .env.example)
-  if (lowerFilename.startsWith('.env') && lowerFilename !== '.env.example') {
+  // Check secrets (.env* except .env.example, private keys, and credential files)
+  if (
+    (lowerFilename.startsWith('.env') && lowerFilename !== '.env.example') ||
+    SECRET_FILENAMES.has(lowerFilename) ||
+    lowerFilename.startsWith('id_rsa.')
+  ) {
     return true;
   }
 
@@ -158,10 +165,13 @@ export function isExcluded(path: string, type?: 'blob' | 'tree'): boolean {
     return true;
   }
 
-  // Check binary/media extensions
+  // Check binary/media and secret key extensions
   const lastDot = lowerFilename.lastIndexOf('.');
-  if (lastDot !== -1 && BINARY_EXTENSIONS.has(lowerFilename.slice(lastDot))) {
-    return true;
+  if (lastDot !== -1) {
+    const ext = lowerFilename.slice(lastDot);
+    if (BINARY_EXTENSIONS.has(ext) || SECRET_EXTENSIONS.has(ext)) {
+      return true;
+    }
   }
   if (lowerFilename.endsWith('.tar.gz')) {
     return true;

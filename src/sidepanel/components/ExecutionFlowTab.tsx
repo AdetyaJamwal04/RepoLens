@@ -26,7 +26,8 @@ export const ExecutionFlowTab: React.FC<ExecutionFlowTabProps> = ({
   commitSha,
   status,
 }) => {
-  if (steps.length === 0) {
+  const safeSteps = steps ?? [];
+  if (safeSteps.length === 0) {
     if (status === 'indexing' || status === 'analyzing') {
       return (
         <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/60 p-6 text-center">
@@ -50,7 +51,7 @@ export const ExecutionFlowTab: React.FC<ExecutionFlowTabProps> = ({
     );
   }
 
-  const orderedSteps = [...steps].sort((a, b) => a.stepNumber - b.stepNumber);
+  const orderedSteps = [...safeSteps].sort((a, b) => a.stepNumber - b.stepNumber);
 
   return (
     <div className="space-y-3">
@@ -59,23 +60,29 @@ export const ExecutionFlowTab: React.FC<ExecutionFlowTabProps> = ({
       </h2>
 
       <ol className="relative space-y-3 border-l border-zinc-800 pl-4 ml-2">
-        {orderedSteps.map((step) => {
+        {orderedSteps.map((step, idx) => {
+          const sourceRef = step.sourceReference ?? {
+            filePath: '',
+            commitSha: '',
+            type: 'source' as const,
+            confidence: 'unknown' as const,
+          };
           const effectiveRef =
-            gitRef || commitSha || step.sourceReference.commitSha || 'main';
+            gitRef || commitSha || sourceRef.commitSha || 'main';
           const sourceUrl = buildGitHubFileUrl({
             owner,
             repo,
             ref: effectiveRef,
-            filePath: step.sourceReference.filePath,
-            lineStart: step.sourceReference.lineStart,
-            lineEnd: step.sourceReference.lineEnd,
+            filePath: sourceRef.filePath || '',
+            lineStart: sourceRef.lineStart,
+            lineEnd: sourceRef.lineEnd,
           });
-          const citationLabel = formatEvidenceCitation(step.sourceReference);
+          const citationLabel = formatEvidenceCitation(sourceRef);
           const isVerified = step.confidence === 'verified';
 
           return (
             <li
-              key={step.stepNumber}
+              key={`${step.stepNumber}-${idx}`}
               className="relative rounded-lg border border-zinc-800 bg-zinc-900/70 p-3"
             >
               <span
@@ -120,9 +127,9 @@ export const ExecutionFlowTab: React.FC<ExecutionFlowTabProps> = ({
                   <ExternalLink className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
                 </a>
 
-                {step.sourceReference.snippet && (
+                {sourceRef.snippet && (
                   <pre className="mt-2 overflow-x-auto rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-[11px] text-zinc-300">
-                    {step.sourceReference.snippet}
+                    {sourceRef.snippet}
                   </pre>
                 )}
               </div>

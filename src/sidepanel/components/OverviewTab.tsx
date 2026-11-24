@@ -60,8 +60,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     );
   }
 
+  const technologies = overview.technologies ?? [];
+  const keyModules = overview.keyModules ?? [];
+  const observations = overview.observations ?? [];
+
   const techByCategory = new Map<string, OverviewOutput['technologies']>();
-  for (const tech of overview.technologies) {
+  for (const tech of technologies) {
     const category = tech.category || 'Other';
     const existing = techByCategory.get(category) ?? [];
     existing.push(tech);
@@ -89,18 +93,24 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               <div key={category}>
                 <h3 className="text-[11px] font-medium text-zinc-400">{category}</h3>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {items.map((tech, idx) => {
+                  {(items ?? []).map((tech, idx) => {
+                    const evidence = tech.evidence ?? {
+                      filePath: '',
+                      commitSha: '',
+                      type: 'source' as const,
+                      confidence: 'unknown' as const,
+                    };
                     const evidenceUrl = buildGitHubFileUrl({
                       owner,
                       repo,
-                      ref: gitRef || tech.evidence.commitSha || 'main',
-                      filePath: tech.evidence.filePath,
-                      lineStart: tech.evidence.lineStart,
-                      lineEnd: tech.evidence.lineEnd,
+                      ref: gitRef || evidence.commitSha || 'main',
+                      filePath: evidence.filePath || '',
+                      lineStart: evidence.lineStart,
+                      lineEnd: evidence.lineEnd,
                     });
-                    const citationText = formatEvidenceCitation(tech.evidence);
-                    const tooltip = `${citationText} (${tech.evidence.confidence})${
-                      tech.evidence.snippet ? ` — ${tech.evidence.snippet}` : ''
+                    const citationText = formatEvidenceCitation(evidence);
+                    const tooltip = `${citationText} (${evidence.confidence})${
+                      evidence.snippet ? ` — ${evidence.snippet}` : ''
                     }`;
 
                     return (
@@ -115,7 +125,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                       >
                         <span className="font-medium">{tech.name}</span>
                         <span className="font-mono text-[10px] text-zinc-400">
-                          {tech.evidence.filePath.split('/').pop()}
+                          {(evidence.filePath || '').split('/').pop() || 'unknown'}
                         </span>
                         <ExternalLink className="h-2.5 w-2.5 text-zinc-500" aria-hidden="true" />
                       </a>
@@ -135,16 +145,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             Key Modules
           </h2>
         </div>
-        {overview.keyModules.length === 0 ? (
+        {keyModules.length === 0 ? (
           <p className="mt-2 text-xs text-zinc-500">No key modules identified.</p>
         ) : (
           <ul className="mt-2.5 space-y-2">
-            {overview.keyModules.map((mod, idx) => {
+            {keyModules.map((mod, idx) => {
               const modUrl = buildGitHubFileUrl({
                 owner,
                 repo,
                 ref: gitRef || 'main',
-                filePath: mod.path,
+                filePath: mod.path || '',
               });
               return (
                 <li
@@ -182,13 +192,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         <p className="mt-1.5 text-xs leading-relaxed text-zinc-200">{overview.executionSummary}</p>
       </section>
 
-      {overview.observations.length > 0 && (
+      {observations.length > 0 && (
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3.5">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
             Key Observations
           </h2>
           <ul className="mt-2 space-y-1.5 list-disc pl-4 text-xs text-zinc-300">
-            {overview.observations.map((obs, idx) => (
+            {observations.map((obs, idx) => (
               <li key={idx} className="leading-relaxed">
                 {obs}
               </li>

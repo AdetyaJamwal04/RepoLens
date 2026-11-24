@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
-import { App, buildCachedRepoIndex, fetchBoundedContents } from '../../src/sidepanel/App';
+import { App, ErrorBoundary, buildCachedRepoIndex, fetchBoundedContents } from '../../src/sidepanel/App';
 import { Header } from '../../src/sidepanel/components/Header';
 import { OverviewTab } from '../../src/sidepanel/components/OverviewTab';
 import { ArchitectureTab } from '../../src/sidepanel/components/ArchitectureTab';
@@ -824,7 +824,8 @@ describe('Sidepanel App & Components', () => {
     )[0];
     act(() => setInputValue(openaiKeyInput, 'sk-interactive-test'));
 
-    const form = findElements(container, (el) => el.tagName === 'FORM')[0];
+    const dialog = findElements(container, (el) => el.getAttribute('role') === 'dialog')[0];
+    const form = findElements(dialog, (el) => el.tagName === 'FORM')[0];
     await act(async () => {
       form.dispatchEvent(new FakeEvent('submit', { bubbles: true, cancelable: true }));
       await flushAsync();
@@ -862,7 +863,7 @@ describe('Sidepanel App & Components', () => {
       geminiApiKey: 'test-gemini-key',
     });
 
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string): Promise<unknown> => {
       if (url.endsWith('/repos/facebook/react')) {
         return {
           ok: true,
@@ -1154,6 +1155,235 @@ describe('Sidepanel App & Components', () => {
     expect(onMessagesChange).toHaveBeenCalledTimes(1);
     expect(activeMessages).toEqual([]);
 
+    unmount();
+  });
+
+  it('resolves true commit SHA via getCommitSha, prefers root README.md, and resumes partial cache on Refresh', async () => {
+    const trueCommitSha = '1111222233334444555566667777888899990000';
+    const branchIdentity: RepoIdentity = {
+      owner: 'facebook',
+      repo: 'react',
+      branch: 'main',
+      pageType: 'repo_root',
+    };
+
+    await new SettingsStore().saveSettings({
+      aiProvider: 'gemini',
+      geminiApiKey: 'test-gemini-key',
+    });
+
+    let aiCallCount = 0;
+    const fetchMock = vi.fn(async (url: string): Promise<unknown> => {
+      if (url.endsWith('/repos/facebook/react')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            owner: { login: 'facebook' },
+            name: 'react',
+            default_branch: 'main',
+            description: null,
+            private: false,
+            language: 'TypeScript',
+          }),
+        };
+      }
+      if (url.includes('/commits/main')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ sha: trueCommitSha }),
+        };
+      }
+      if (url.includes('/git/trees/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            sha: 'tree_sha_should_not_be_used',
+            truncated: false,
+            tree: [
+              { path: '.github/README.md', mode: '100644', type: 'blob', sha: 's0' },
+              { path: 'README.md', mode: '100644', type: 'blob', sha: 's1' },
+              { path: 'package.json', mode: '100644', type: 'blob', sha: 's2' },
+              { path: 'src/index.ts', mode: '100644', type: 'blob', sha: 's3' },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/contents/README.md')) {
+        return { ok: true, status: 200, headers: new Headers(), text: async () => '# Root README' };
+      }
+      if (url.includes('/contents/.github/README.md')) {
+        return { ok: true, status: 200, headers: new Headers(), text: async () => '# Nested README' };
+      }
+      if (url.includes('/contents/package.json')) {
+        return { ok: true, status: 200, headers: new Headers(), text: async () => '{"name":"react"}' };
+      }
+      if (url.includes('/contents/src/index.ts')) {
+        return { ok: true, status: 200, headers: new Headers(), text: async () => 'export {};' };
+      }
+      if (url.includes('generativelanguage.googleapis.com')) {
+        aiCallCount++;
+        if (aiCallCount === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              candidates: [{ content: { parts: [{ text: JSON.stringify(sampleOverview) }] } }],
+            }),
+          };
+        }
+        if (aiCallCount === 2) {
+          // Simulate Stage 2 failure on first run
+          return { ok: false, status: 500, text: async () => 'Temporary AI error' };
+        }
+        if (aiCallCount === 3) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              candidates: [{ content: { parts: [{ text: JSON.stringify(sampleArchitecture) }] } }],
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [{ content: { parts: [{ text: JSON.stringify(sampleExplorer) }] } }],
+          }),
+        };
+      }
+      return { ok: false, status: 404, headers: new Headers(), json: async () => ({ message: 'Not found' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { container, unmount } = mount(<App initialIdentity={branchIdentity} />);
+    await act(async () => {
+      await flushAsync();
+    });
+
+    const analyzeBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('Analyze')
+    )[0];
+
+    await act(async () => {
+      clickElement(analyzeBtn);
+      await flushAsync(20);
+    });
+
+    // True commit SHA badge used (not tree_sha_should_not_be_used), root README fetched, Stage 1 cached
+    expect(container.textContent).toContain(trueCommitSha.slice(0, 7));
+    expect(container.textContent).not.toContain('tree_sh');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/contents/README.md'),
+      expect.any(Object)
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('/contents/.github/README.md'),
+      expect.any(Object)
+    );
+
+    // Clicking Refresh after partial failure resumes from Stage 2 without re-running Stage 1
+    const refreshBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('Refresh')
+    )[0];
+    expect(refreshBtn).toBeDefined();
+
+    await act(async () => {
+      clickElement(refreshBtn);
+      await flushAsync(20);
+    });
+
+    expect(aiCallCount).toBe(4); // 1 (Stage 1) + 1 (Stage 2 fail) + 1 (Stage 2 resume) + 1 (Stage 3)
+    const archTab = findElements(
+      container,
+      (el) => el.getAttribute('role') === 'tab' && el.getAttribute('aria-label') === 'Architecture'
+    )[0];
+    act(() => clickElement(archTab));
+    expect(container.textContent).toContain('Component-Based Fiber Architecture');
+
+    unmount();
+  });
+
+  it('preserves AskRepositoryTab draft input when switching between tabs on the same repository', () => {
+    const { container, unmount } = mount(
+      <App
+        initialIdentity={sampleIdentity}
+        initialStatus="ready"
+        initialIndex={sampleIndex}
+        initialOverview={sampleOverview}
+        initialArchitecture={sampleArchitecture}
+        initialExplorer={sampleExplorer}
+      />
+    );
+
+    const findTab = (ariaLabel: string) =>
+      findElements(
+        container,
+        (el) => el.getAttribute('role') === 'tab' && el.getAttribute('aria-label') === ariaLabel
+      )[0];
+
+    act(() => clickElement(findTab('Ask Repository')));
+    const textarea = findElements(container, (el) => el.tagName === 'TEXTAREA')[0];
+    act(() => setInputValue(textarea, 'Draft question still here'));
+
+    act(() => clickElement(findTab('Overview')));
+    act(() => clickElement(findTab('Ask Repository')));
+
+    const textareaAfter = findElements(container, (el) => el.tagName === 'TEXTAREA')[0];
+    expect(textareaAfter.value).toBe('Draft question still here');
+
+    unmount();
+  });
+
+  it('guards defensive arrays in tabs and catches unexpected render errors via ErrorBoundary', () => {
+    const partialHtml = renderToString(
+      <>
+        <OverviewTab
+          overview={{ purpose: 'Minimal', executionSummary: 'Runs' } as unknown as OverviewOutput}
+          owner="facebook"
+          repo="react"
+          gitRef="main"
+          status="ready"
+        />
+        <ArchitectureTab
+          architecture={{ pattern: 'Simple' } as unknown as ArchitectureOutput}
+          owner="facebook"
+          repo="react"
+          gitRef="main"
+          status="ready"
+        />
+        <CodebaseExplorerTab
+          explorer={{} as unknown as CodebaseExplorerOutput}
+          owner="facebook"
+          repo="react"
+          gitRef="main"
+          status="ready"
+        />
+      </>
+    );
+    expect(partialHtml).toContain('Minimal');
+    expect(partialHtml).toContain('Simple');
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const BrokenChild = (): React.ReactElement => {
+      throw new Error('Boom render crash');
+    };
+    const { container, unmount } = mount(
+      <ErrorBoundary>
+        <BrokenChild />
+      </ErrorBoundary>
+    );
+    expect(container.textContent).toContain('Something went wrong');
+    expect(container.textContent).toContain('Boom render crash');
+    consoleSpy.mockRestore();
     unmount();
   });
 });

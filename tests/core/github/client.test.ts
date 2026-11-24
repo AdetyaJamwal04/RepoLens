@@ -178,4 +178,23 @@ describe('GitHubClient', () => {
     await expect(client.getRepoMetadata('owner', 'private-repo')).rejects.toThrowError(GitHubApiError);
     await expect(client.getRepoMetadata('owner', 'private-repo')).rejects.not.toThrowError(RateLimitError);
   });
+
+  it('resolves full commit SHA via getCommitSha', async () => {
+    const expectedSha = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-ratelimit-remaining': '50' }),
+      json: async () => ({ sha: expectedSha }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new GitHubClient('ghp_abc');
+    const sha = await client.getCommitSha('facebook', 'react', 'feat/test');
+    expect(sha).toBe(expectedSha);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/facebook/react/commits/feat%2Ftest',
+      expect.any(Object)
+    );
+  });
 });

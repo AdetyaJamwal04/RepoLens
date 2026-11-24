@@ -21,6 +21,7 @@ export interface HeaderProps {
   stageMessage?: string | null;
   isFromCache?: boolean;
   hasAnalysis?: boolean;
+  hasFullAnalysis?: boolean;
   onAnalyze: () => void;
   onOpenSettings: () => void;
 }
@@ -60,6 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
   stageMessage,
   isFromCache = false,
   hasAnalysis = false,
+  hasFullAnalysis = false,
   onAnalyze,
   onOpenSettings,
 }) => {
@@ -111,7 +113,13 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onAnalyze}
             disabled={!identity || isBusy}
             className="inline-flex items-center gap-1.5 rounded-md border border-indigo-500/40 bg-indigo-600/90 px-2.5 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
-            title={hasAnalysis ? 'Refresh analysis' : 'Analyze repository'}
+            title={
+              hasFullAnalysis
+                ? 'Refresh analysis'
+                : hasAnalysis
+                  ? 'Resume partial analysis'
+                  : 'Analyze repository'
+            }
           >
             {hasAnalysis ? (
               <RefreshCw className={`h-3.5 w-3.5 ${isBusy ? 'animate-spin' : ''}`} aria-hidden="true" />
@@ -155,7 +163,7 @@ export const Header: React.FC<HeaderProps> = ({
           {shortSha && (
             <span
               className="inline-flex items-center gap-1 rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-400"
-              title={`Commit/Tree SHA: ${effectiveSha}`}
+              title={`Commit SHA: ${effectiveSha}`}
             >
               <GitCommit className="h-3 w-3 text-zinc-500" aria-hidden="true" />
               {shortSha}

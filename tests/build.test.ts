@@ -9,6 +9,14 @@ describe('Extension Build Output', () => {
     const manifest = JSON.parse(readFileSync(resolve(dist, 'manifest.json'), 'utf-8'));
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.side_panel?.default_path).toBe('sidepanel/index.html');
+    expect(manifest.host_permissions).toEqual(
+      expect.arrayContaining([
+        'https://github.com/*',
+        'https://api.github.com/*',
+        'https://generativelanguage.googleapis.com/*',
+        'https://api.openai.com/*',
+      ])
+    );
     expect(existsSync(resolve(dist, 'background.js'))).toBe(true);
     expect(existsSync(resolve(dist, 'content.js'))).toBe(true);
     const contentJs = readFileSync(resolve(dist, 'content.js'), 'utf-8');

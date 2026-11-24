@@ -24,11 +24,11 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
   status,
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(
-    architecture?.components[0]?.id ?? null
+    architecture?.components?.[0]?.id ?? null
   );
 
   useEffect(() => {
-    setSelectedId(architecture?.components[0]?.id ?? null);
+    setSelectedId(architecture?.components?.[0]?.id ?? null);
   }, [architecture]);
 
   if (!architecture) {
@@ -55,8 +55,12 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
     );
   }
 
+  const components = architecture.components ?? [];
+  const dataFlow = architecture.dataFlow ?? [];
+  const externalIntegrations = architecture.externalIntegrations ?? [];
+
   const componentByIdOrName = new Map(
-    architecture.components.flatMap((c) => [
+    components.flatMap((c) => [
       [c.id.toLowerCase(), c],
       [c.name.toLowerCase(), c],
     ])
@@ -78,22 +82,24 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3.5">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-          Components ({architecture.components.length})
+          Components ({components.length})
         </h2>
         <p className="mt-1 text-[11px] text-zinc-500">
           Select a component card to highlight its dependencies and related modules.
         </p>
 
-        {architecture.components.length === 0 ? (
+        {components.length === 0 ? (
           <p className="mt-2 text-xs text-zinc-500">No components extracted.</p>
         ) : (
           <div className="mt-2.5 space-y-2.5">
-            {architecture.components.map((comp) => {
+            {components.map((comp) => {
+              const importantFiles = comp.importantFiles ?? [];
+              const dependencies = comp.dependencies ?? [];
               const isSelected = selectedId === comp.id;
-              const usedBy = architecture.components.filter(
+              const usedBy = components.filter(
                 (other) =>
                   other.id !== comp.id &&
-                  other.dependencies.some(
+                  (other.dependencies ?? []).some(
                     (dep) =>
                       dep.toLowerCase() === comp.id.toLowerCase() ||
                       dep.toLowerCase() === comp.name.toLowerCase()
@@ -129,13 +135,13 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
                   </button>
 
                   <div className="border-t border-zinc-800/80 px-3 py-2.5 space-y-2 text-xs">
-                    {comp.importantFiles.length > 0 && (
+                    {importantFiles.length > 0 && (
                       <div>
                         <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                           Important Files
                         </span>
                         <ul className="mt-1 space-y-1">
-                          {comp.importantFiles.map((filePath) => {
+                          {importantFiles.map((filePath) => {
                             const fileUrl = buildGitHubFileUrl({
                               owner,
                               repo,
@@ -165,10 +171,10 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
                       <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                         Dependencies:
                       </span>
-                      {comp.dependencies.length === 0 ? (
+                      {dependencies.length === 0 ? (
                         <span className="text-[11px] text-zinc-500">None</span>
                       ) : (
-                        comp.dependencies.map((dep) => {
+                        dependencies.map((dep) => {
                           const target = componentByIdOrName.get(dep.toLowerCase());
                           if (target) {
                             return (
@@ -223,11 +229,11 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
           Data Flow
         </h2>
-        {architecture.dataFlow.length === 0 ? (
+        {dataFlow.length === 0 ? (
           <p className="mt-2 text-xs text-zinc-500">No data flow steps documented.</p>
         ) : (
           <ol className="mt-2.5 space-y-2">
-            {architecture.dataFlow.map((step, idx) => (
+            {dataFlow.map((step, idx) => (
               <li key={idx} className="flex items-start gap-2 text-xs text-zinc-200">
                 <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-zinc-800 font-mono text-[10px] text-indigo-300">
                   {idx + 1}
@@ -246,11 +252,11 @@ export const ArchitectureTab: React.FC<ArchitectureTabProps> = ({
             External Integrations
           </h2>
         </div>
-        {architecture.externalIntegrations.length === 0 ? (
+        {externalIntegrations.length === 0 ? (
           <p className="mt-2 text-xs text-zinc-500">No external integrations detected.</p>
         ) : (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {architecture.externalIntegrations.map((integration, idx) => (
+            {externalIntegrations.map((integration, idx) => (
               <span
                 key={idx}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-200"

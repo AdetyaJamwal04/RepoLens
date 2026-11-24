@@ -59,10 +59,16 @@ describe('AI Providers', () => {
 
       const [url, options] = fetchMock.mock.calls[0];
       expect(url).toBe(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=test-gemini-key'
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
       );
+      expect(url).not.toContain('key=');
       expect(options.method).toBe('POST');
-      expect(options.headers).toEqual(expect.objectContaining({ 'Content-Type': 'application/json' }));
+      expect(options.headers).toEqual(
+        expect.objectContaining({
+          'Content-Type': 'application/json',
+          'x-goog-api-key': 'test-gemini-key',
+        })
+      );
 
       const body = JSON.parse(options.body as string);
       expect(body.contents[0].parts[0].text).toBe('Explain repository');
@@ -100,7 +106,16 @@ describe('AI Providers', () => {
       expect(chunks).toEqual(['Hello ', 'world!']);
 
       const [url, options] = fetchMock.mock.calls[0];
-      expect(url).toContain('streamGenerateContent?alt=sse&key=test-gemini-key');
+      expect(url).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse'
+      );
+      expect(url).not.toContain('key=');
+      expect(options.headers).toEqual(
+        expect.objectContaining({
+          'Content-Type': 'application/json',
+          'x-goog-api-key': 'test-gemini-key',
+        })
+      );
 
       const body = JSON.parse(options.body as string);
       expect(body.contents).toEqual([

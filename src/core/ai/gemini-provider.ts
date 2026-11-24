@@ -7,7 +7,7 @@ export class GeminiProvider implements AIProvider {
   ) {}
 
   async generateStructured<T>(prompt: string, schema: object, systemInstruction?: string): Promise<T> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`;
 
     const body: Record<string, unknown> = {
       contents: [
@@ -34,6 +34,7 @@ export class GeminiProvider implements AIProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': this.apiKey,
         },
         body: JSON.stringify(body),
       });
@@ -70,7 +71,7 @@ export class GeminiProvider implements AIProvider {
     onChunk: (chunk: string) => void,
     systemInstruction?: string
   ): Promise<string> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(this.apiKey)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:streamGenerateContent?alt=sse`;
 
     const systemParts: string[] = [];
     if (systemInstruction) {
@@ -106,6 +107,7 @@ export class GeminiProvider implements AIProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': this.apiKey,
         },
         body: JSON.stringify(body),
       });

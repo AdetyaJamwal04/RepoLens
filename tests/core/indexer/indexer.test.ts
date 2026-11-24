@@ -62,6 +62,24 @@ describe('Repository Indexer & Prioritizer', () => {
       expect(isExcluded('config/.env.example')).toBe(false);
     });
 
+    it('excludes private key and credential files', () => {
+      const secrets = [
+        'certs/server.pem',
+        'private.key',
+        'cert.p12',
+        'bundle.pfx',
+        'id_rsa',
+        '.ssh/id_rsa.pub',
+        '.npmrc',
+        '.pypirc',
+        'credentials.json',
+        'config/credentials.json',
+      ];
+      for (const secret of secrets) {
+        expect(isExcluded(secret)).toBe(true);
+      }
+    });
+
     it('does not exclude standard source files', () => {
       expect(isExcluded('src/index.ts')).toBe(false);
       expect(isExcluded('package.json')).toBe(false);

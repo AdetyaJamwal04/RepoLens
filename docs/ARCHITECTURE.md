@@ -12,7 +12,7 @@ Defined in [extension/manifest.json](../extension/manifest.json) and built via [
   - Bundled as an ES module (`"type": "module"`).
   - Calls `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` so clicking the extension action opens the side panel.
   - Maintains an ephemeral `tabRepoMap` (`Map<number, RepoIdentity>`) keyed by Chrome tab ID and cleans entries on `chrome.tabs.onRemoved`.
-  - Listens for `REPO_DETECTED` messages from content scripts and `GET_CURRENT_REPO` queries from the side panel. If `tabRepoMap` has no entry for the active tab, falls back to `parseGitHubUrl(activeTab.url)`.
+  - Listens for `REPO_DETECTED` messages from content scripts (deriving/validating identity via `sender.tab.url`) and `GET_CURRENT_REPO` queries from the side panel (re-validating active or requested tab URLs via `parseGitHubUrl` and clearing stale entries when navigating away from GitHub).
 - **Content Script (`src/content/index.ts` -> `dist/content.js`):**
   - Bundled separately via `esbuild` as a standalone IIFE (`format: 'iife'`) because MV3 content scripts cannot load external ES module chunks cleanly without web-accessible resource configuration.
   - Injected on `https://github.com/*` at `document_idle`.
@@ -42,7 +42,7 @@ flowchart LR
 
 1. **Detection:** The user navigates on `github.com`. `content.js` extracts `RepoIdentity` and notifies `background.js`.
 2. **Hydration:** `App.tsx` requests `GET_CURRENT_REPO`. If `commitSha` is present in the URL and exists in `RepoCache`, cached results hydrate immediately.
-3. **Acquisition:** Clicking **Analyze** calls `GitHubClient.getRepoMetadata()` and `GitHubClient.getTree()` (recursive). `resolvedSha` is anchored to `identity.commitSha || treeRes.sha || targetRef`.
+3. **Acquisition:** Clicking **Analyze** calls `GitHubClient.getRepoMetadata()`, `GitHubClient.getTree()` (recursive), and `GitHubClient.getCommitSha()` (when `identity.commitSha` is not already in the URL) to anchor `resolvedSha` to the true 40-character commit SHA.
 4. **Indexing:** `buildRepoIndex()` excludes noise/secrets, detects languages, locates manifests and candidate entry points, scores files, and renders a tree outline.
 5. **Progressive Analysis:** `AnalysisEngine` executes 3 sequential stages (`Overview` → `Architecture & Execution Flow` → `Codebase Explorer`), fetching bounded file contents (`fetchBoundedContents`) and saving each completed stage to `RepoCache`.
 6. **Interactive Exploration & Q&A:** Users inspect clickable GitHub source citations across tabs or stream follow-up questions through `AnalysisEngine.askQuestion()`.

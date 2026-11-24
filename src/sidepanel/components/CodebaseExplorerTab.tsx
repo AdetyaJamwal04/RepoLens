@@ -68,14 +68,15 @@ export const CodebaseExplorerTab: React.FC<CodebaseExplorerTabProps> = ({
     );
   }
 
+  const allEntries = explorer.entries ?? [];
   const filteredEntries =
     filter === 'all'
-      ? explorer.entries
-      : explorer.entries.filter((entry) => entry.significance === filter);
+      ? allEntries
+      : allEntries.filter((entry) => entry.significance === filter);
 
   const grouped = new Map<string, CodebaseExplorerEntry[]>();
   for (const entry of filteredEntries) {
-    const clean = entry.path.replace(/^\/+/, '');
+    const clean = (entry.path ?? '').replace(/^\/+/, '');
     const topGroup = clean.includes('/') ? `${clean.split('/')[0]}/` : 'root';
     const list = grouped.get(topGroup) ?? [];
     list.push(entry);
@@ -83,10 +84,10 @@ export const CodebaseExplorerTab: React.FC<CodebaseExplorerTabProps> = ({
   }
 
   const counts = {
-    all: explorer.entries.length,
-    critical: explorer.entries.filter((e) => e.significance === 'critical').length,
-    important: explorer.entries.filter((e) => e.significance === 'important').length,
-    supporting: explorer.entries.filter((e) => e.significance === 'supporting').length,
+    all: allEntries.length,
+    critical: allEntries.filter((e) => e.significance === 'critical').length,
+    important: allEntries.filter((e) => e.significance === 'important').length,
+    supporting: allEntries.filter((e) => e.significance === 'supporting').length,
   };
 
   return (
@@ -178,7 +179,7 @@ export const CodebaseExplorerTab: React.FC<CodebaseExplorerTabProps> = ({
                         </a>
 
                         <span
-                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${SIGNIFICANCE_BADGE_CLASSES[entry.significance]}`}
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${SIGNIFICANCE_BADGE_CLASSES[entry.significance] ?? SIGNIFICANCE_BADGE_CLASSES.supporting}`}
                         >
                           {entry.significance}
                         </span>

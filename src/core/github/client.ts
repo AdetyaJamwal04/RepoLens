@@ -133,6 +133,16 @@ export class GitHubClient {
     };
   }
 
+  async getCommitSha(owner: string, repo: string, ref: string): Promise<string> {
+    const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(ref)}`;
+    const response = await this.request(url);
+    const data = await response.json();
+    if (!data || typeof data.sha !== 'string' || !data.sha) {
+      throw new GitHubApiError('Invalid commit response from GitHub API', response.status);
+    }
+    return data.sha;
+  }
+
   async getTree(owner: string, repo: string, ref: string): Promise<GitTreeResponse> {
     const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
     const response = await this.request(url);
