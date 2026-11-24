@@ -91,7 +91,7 @@ flowchart LR
 - `RepoCache`: stores `CachedAnalysis` (`commitSha`, `timestamp`, `repoIndex`, `overview`, `architecture`, `explorer`) under `repolens:v1:<owner>/<repo>:<commitSha>` in `chrome.storage.local` (with an in-memory `Map` fallback for non-extension test environments). Validates `entry.commitSha === commitSha` on read and supports partial-stage updates and prefix-based clearing.
 - `SettingsStore`: manages `UserSettings` (`aiProvider`, `geminiApiKey`, `geminiModel`, `openaiApiKey`, `openaiModel`, `githubToken`) under `repolens:settings` in `chrome.storage.local`.
 
-### Side Panel UI & Tab Workflows ([src/sidepanel/](../src/sidepanel/App.tsx))
+### Side Panel UI & Tab Workflows ([src/sidepanel/App.tsx](../src/sidepanel/App.tsx))
 - `App.tsx` coordinates state, `fetchBoundedContents` (15,000 chars/file, 55,000 chars max per batch), stale-run cancellation via `activeRunIdRef`, and per-stage progressive updates across 5 tabs:
   - `Header.tsx`: repo identity link, branch/SHA badges, status pill (`idle`, `detecting`, `indexing`, `analyzing`, `ready`, `error`), `cached` badge, Analyze/Refresh button, Settings trigger.
   - `OverviewTab.tsx`: Purpose, categorized Tech Stack with clickable citations, Key Modules, Execution Summary, Key Observations.
