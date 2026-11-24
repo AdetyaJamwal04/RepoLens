@@ -1,8 +1,10 @@
 import { OverviewOutput, ArchitectureOutput, CodebaseExplorerOutput } from '../ai/types';
+import type { RepoIndex } from '../indexer/indexer';
 
 export interface CachedAnalysis {
   commitSha: string;
   timestamp: number;
+  repoIndex?: RepoIndex;
   overview?: OverviewOutput;
   architecture?: ArchitectureOutput;
   explorer?: CodebaseExplorerOutput;

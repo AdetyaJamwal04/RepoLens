@@ -27,9 +27,9 @@ import {
   RateLimitError,
 } from '../core/github/client';
 import type { RepoIdentity } from '../core/github/url-parser';
-import { buildRepoIndex, RepoIndex } from '../core/indexer/indexer';
+import { buildRepoIndex, generateTreeOutline, RepoIndex } from '../core/indexer/indexer';
 import { isManifest, isReadme } from '../core/indexer/prioritizer';
-import { RepoCache } from '../core/storage/cache';
+import { CachedAnalysis, RepoCache } from '../core/storage/cache';
 import { SettingsStore, UserSettings } from '../core/storage/settings';
 import { ArchitectureTab } from './components/ArchitectureTab';
 import { AskRepositoryTab } from './components/AskRepositoryTab';
@@ -76,7 +76,85 @@ function formatRepoKey(identity: RepoIdentity | null): string {
   return `${identity.owner.toLowerCase()}/${identity.repo.toLowerCase()}:${identity.branch || ''}:${identity.commitSha || ''}`;
 }
 
-async function fetchBoundedContents(
+export function buildCachedRepoIndex(
+  identity: RepoIdentity,
+  cached: CachedAnalysis
+): RepoIndex {
+  const pathSet = new Set<string>();
+  const manifests = new Set<string>();
+  const entryPoints = new Set<string>();
+  const languages = new Set<string>();
+
+  if (cached.overview) {
+    for (const tech of cached.overview.technologies) {
+      if (tech.evidence?.filePath) {
+        pathSet.add(tech.evidence.filePath);
+        if (tech.evidence.type === 'manifest' || isManifest(tech.evidence.filePath)) {
+          manifests.add(tech.evidence.filePath);
+        }
+      }
+      if (tech.category.toLowerCase().includes('lang')) {
+        languages.add(tech.name);
+      }
+    }
+    for (const mod of cached.overview.keyModules) {
+      if (mod.path) pathSet.add(mod.path);
+    }
+  }
+
+  if (cached.architecture) {
+    for (const comp of cached.architecture.components) {
+      for (const file of comp.importantFiles) {
+        if (file) pathSet.add(file);
+      }
+    }
+    for (const step of cached.architecture.executionFlow) {
+      if (step.sourceReference?.filePath) {
+        pathSet.add(step.sourceReference.filePath);
+        entryPoints.add(step.sourceReference.filePath);
+      }
+    }
+  }
+
+  const treeItems: Array<{ path: string; mode: string; type: 'blob' | 'tree'; sha: string }> = [];
+  if (cached.explorer) {
+    for (const entry of cached.explorer.entries) {
+      if (!entry.path) continue;
+      treeItems.push({
+        path: entry.path,
+        mode: entry.type === 'dir' ? '040000' : '100644',
+        type: entry.type === 'dir' ? 'tree' : 'blob',
+        sha: cached.commitSha,
+      });
+      if (entry.type === 'file') {
+        pathSet.add(entry.path);
+        if (isManifest(entry.path)) manifests.add(entry.path);
+      }
+    }
+  }
+
+  for (const p of pathSet) {
+    if (!treeItems.some((item) => item.path === p)) {
+      treeItems.push({ path: p, mode: '100644', type: 'blob', sha: cached.commitSha });
+    }
+  }
+
+  return {
+    identity: {
+      ...identity,
+      commitSha: cached.commitSha,
+    },
+    defaultBranch: identity.branch || 'main',
+    commitSha: cached.commitSha,
+    languages: Array.from(languages),
+    manifests: Array.from(manifests),
+    candidateEntryPoints: Array.from(entryPoints),
+    prioritizedFiles: Array.from(pathSet),
+    treeOutline: generateTreeOutline(treeItems),
+  };
+}
+
+export async function fetchBoundedContents(
   client: GitHubClient,
   owner: string,
   repo: string,
@@ -92,6 +170,12 @@ async function fetchBoundedContents(
       content: await client.getFileContent(owner, repo, path, ref),
     }))
   );
+
+  for (const outcome of settled) {
+    if (outcome.status === 'rejected' && outcome.reason instanceof RateLimitError) {
+      throw outcome.reason;
+    }
+  }
 
   for (const outcome of settled) {
     if (outcome.status !== 'fulfilled') continue;
@@ -200,6 +284,7 @@ export function App({
           .get(nextRepo.owner, nextRepo.repo, nextRepo.commitSha)
           .then((cached) => {
             if (!cached || formatRepoKey(nextRepo) !== lastRepoKeyRef.current) return;
+            setRepoIndex(cached.repoIndex ?? buildCachedRepoIndex(nextRepo, cached));
             if (cached.overview) setOverview(cached.overview);
             if (cached.architecture) setArchitecture(cached.architecture);
             if (cached.explorer) setExplorer(cached.explorer);
@@ -374,6 +459,7 @@ export function App({
           if (isStale()) return;
           setOverview(stage1Overview);
           await repoCache.set(identity.owner, identity.repo, resolvedSha, {
+            repoIndex: index,
             overview: stage1Overview,
           });
         } else {
@@ -634,6 +720,7 @@ export function App({
 
             {activeTab === 'architecture' && (
               <ArchitectureTab
+                key={formatRepoKey(identity)}
                 architecture={architecture}
                 owner={identity.owner}
                 repo={identity.repo}
@@ -644,6 +731,7 @@ export function App({
 
             {activeTab === 'explorer' && (
               <CodebaseExplorerTab
+                key={formatRepoKey(identity)}
                 explorer={explorer}
                 owner={identity.owner}
                 repo={identity.repo}
@@ -666,6 +754,7 @@ export function App({
 
             {activeTab === 'ask' && (
               <AskRepositoryTab
+                key={formatRepoKey(identity)}
                 repoIndex={repoIndex}
                 overview={overview}
                 architecture={architecture}

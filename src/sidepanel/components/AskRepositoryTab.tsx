@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, MessageSquare, Send, Trash2 } from 'lucide-react';
 import { AnalysisEngine } from '../../core/ai/engine';
 import { GeminiProvider } from '../../core/ai/gemini-provider';
@@ -60,6 +60,27 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
       setInternalMessages(next);
     }
   };
+
+  const repoKey = repoIndex
+    ? `${repoIndex.identity.owner.toLowerCase()}/${repoIndex.identity.repo.toLowerCase()}:${repoIndex.commitSha || repoIndex.defaultBranch}`
+    : '';
+  const repoKeyRef = useRef(repoKey);
+  const streamRunIdRef = useRef(0);
+  const isControlledRef = useRef(Boolean(onMessagesChange));
+  isControlledRef.current = Boolean(onMessagesChange);
+
+  useEffect(() => {
+    if (repoKeyRef.current === repoKey) return;
+    repoKeyRef.current = repoKey;
+    streamRunIdRef.current += 1;
+    setIsStreaming(false);
+    setStreamingContent('');
+    setChatError(null);
+    setInput('');
+    if (!isControlledRef.current) {
+      setInternalMessages([]);
+    }
+  }, [repoKey]);
 
   const activeApiKey =
     settings.aiProvider === 'openai' ? settings.openaiApiKey : settings.geminiApiKey;
@@ -199,6 +220,11 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
     }
 
     setChatError(null);
+    const runId = ++streamRunIdRef.current;
+    const requestRepoKey = repoKey;
+    const isStale = () =>
+      streamRunIdRef.current !== runId || repoKeyRef.current !== requestRepoKey;
+
     const nextHistory: ChatMessage[] = [...messages, { role: 'user', content: trimmed }];
     updateMessages(nextHistory);
     setInput('');
@@ -222,22 +248,27 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
         },
         nextHistory,
         (chunk) => {
+          if (isStale()) return;
           accumulated += chunk;
           setStreamingContent(accumulated);
         }
       );
 
+      if (isStale()) return;
       const finalAnswer = fullResponse || accumulated;
       updateMessages([...nextHistory, { role: 'assistant', content: finalAnswer }]);
     } catch (err: unknown) {
+      if (isStale()) return;
       if (err instanceof AIProviderError) {
         setChatError(err.friendlyMessage);
       } else {
         setChatError(err instanceof Error ? err.message : 'Failed to stream response.');
       }
     } finally {
-      setIsStreaming(false);
-      setStreamingContent('');
+      if (!isStale()) {
+        setIsStreaming(false);
+        setStreamingContent('');
+      }
     }
   };
 

@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { act } from 'react';
+import type { Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
-import { App } from '../../src/sidepanel/App';
+import { App, buildCachedRepoIndex, fetchBoundedContents } from '../../src/sidepanel/App';
 import { Header } from '../../src/sidepanel/components/Header';
 import { OverviewTab } from '../../src/sidepanel/components/OverviewTab';
 import { ArchitectureTab } from '../../src/sidepanel/components/ArchitectureTab';
@@ -10,21 +12,275 @@ import { AskRepositoryTab } from '../../src/sidepanel/components/AskRepositoryTa
 import { SettingsModal } from '../../src/sidepanel/components/SettingsModal';
 import { buildGitHubFileUrl, sanitizeExternalUrl } from '../../src/sidepanel/utils';
 import { RepoIdentity } from '../../src/core/github/url-parser';
-import { RateLimitError } from '../../src/core/github/client';
+import { GitHubClient, RateLimitError } from '../../src/core/github/client';
 import { RepoIndex } from '../../src/core/indexer/indexer';
 import {
   ArchitectureOutput,
+  ChatMessage,
   CodebaseExplorerOutput,
   OverviewOutput,
 } from '../../src/core/ai/types';
 import { SettingsStore, UserSettings } from '../../src/core/storage/settings';
 import { RepoCache } from '../../src/core/storage/cache';
 
+// Lightweight in-memory DOM shim for exercising React 19 createRoot & events without jsdom
+class FakeNode {
+  nodeType: number;
+  nodeName: string;
+  childNodes: FakeNode[] = [];
+  parentNode: FakeNode | null = null;
+  listeners = new Map<string, Set<(evt: FakeEvent) => void>>();
+  captureListeners = new Map<string, Set<(evt: FakeEvent) => void>>();
+  attributes = new Map<string, string>();
+  style: Record<string, string> = {};
+  _value = '';
+  _checked = false;
+  _data = '';
+  disabled = false;
+
+  constructor(nodeType: number, nodeName: string) {
+    this.nodeType = nodeType;
+    this.nodeName = nodeName;
+  }
+
+  get ownerDocument() {
+    return fakeDoc;
+  }
+  get firstChild() {
+    return this.childNodes[0] ?? null;
+  }
+  get lastChild() {
+    return this.childNodes[this.childNodes.length - 1] ?? null;
+  }
+  get nextSibling(): FakeNode | null {
+    if (!this.parentNode) return null;
+    const idx = this.parentNode.childNodes.indexOf(this);
+    return this.parentNode.childNodes[idx + 1] ?? null;
+  }
+  get textContent(): string {
+    if (this.nodeType === 3 || this.nodeType === 8) return this._data;
+    return this.childNodes.map((c) => c.textContent).join('');
+  }
+  set textContent(val: string) {
+    if (this.nodeType === 3 || this.nodeType === 8) {
+      this._data = String(val);
+      return;
+    }
+    this.childNodes = [];
+    if (val !== '' && val !== null && val !== undefined) {
+      this.appendChild(fakeDoc.createTextNode(String(val)));
+    }
+  }
+  get nodeValue() {
+    return this._data;
+  }
+  set nodeValue(val: string) {
+    this._data = String(val);
+  }
+  appendChild(child: FakeNode) {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    child.parentNode = this;
+    this.childNodes.push(child);
+    return child;
+  }
+  insertBefore(child: FakeNode, ref: FakeNode | null) {
+    if (!ref) return this.appendChild(child);
+    if (child.parentNode) child.parentNode.removeChild(child);
+    const idx = this.childNodes.indexOf(ref);
+    child.parentNode = this;
+    if (idx === -1) this.childNodes.push(child);
+    else this.childNodes.splice(idx, 0, child);
+    return child;
+  }
+  removeChild(child: FakeNode) {
+    const idx = this.childNodes.indexOf(child);
+    if (idx !== -1) {
+      this.childNodes.splice(idx, 1);
+      child.parentNode = null;
+    }
+    return child;
+  }
+  contains(other: FakeNode | null) {
+    let cur = other;
+    while (cur) {
+      if (cur === this) return true;
+      cur = cur.parentNode;
+    }
+    return false;
+  }
+  setAttribute(k: string, v: string) {
+    this.attributes.set(k, String(v));
+    if (k === 'disabled') this.disabled = true;
+  }
+  getAttribute(k: string) {
+    return this.attributes.has(k) ? this.attributes.get(k)! : null;
+  }
+  removeAttribute(k: string) {
+    this.attributes.delete(k);
+    if (k === 'disabled') this.disabled = false;
+  }
+  hasAttribute(k: string) {
+    return this.attributes.has(k);
+  }
+  addEventListener(type: string, fn: (evt: FakeEvent) => void, opts?: boolean | { capture?: boolean }) {
+    const cap = typeof opts === 'boolean' ? opts : Boolean(opts?.capture);
+    const map = cap ? this.captureListeners : this.listeners;
+    const set = map.get(type) ?? new Set();
+    set.add(fn);
+    map.set(type, set);
+  }
+  removeEventListener(type: string, fn: (evt: FakeEvent) => void, opts?: boolean | { capture?: boolean }) {
+    const cap = typeof opts === 'boolean' ? opts : Boolean(opts?.capture);
+    (cap ? this.captureListeners : this.listeners).get(type)?.delete(fn);
+  }
+  dispatchEvent(evt: FakeEvent) {
+    evt.target = evt.target ?? this;
+    const chain: FakeNode[] = [];
+    let cur: FakeNode | null = this;
+    while (cur) {
+      chain.push(cur);
+      cur = cur.parentNode;
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      evt.currentTarget = chain[i];
+      const fns = chain[i].captureListeners.get(evt.type);
+      if (fns) for (const fn of [...fns]) fn(evt);
+      if (evt.cancelBubble) return !evt.defaultPrevented;
+    }
+    for (let i = 0; i < chain.length; i++) {
+      if (i > 0 && !evt.bubbles) break;
+      evt.currentTarget = chain[i];
+      const fns = chain[i].listeners.get(evt.type);
+      if (fns) for (const fn of [...fns]) fn(evt);
+      if (evt.cancelBubble) break;
+    }
+    return !evt.defaultPrevented;
+  }
+}
+
+class FakeElement extends FakeNode {
+  tagName: string;
+  type: string;
+  oninput: null = null;
+
+  constructor(tag: string) {
+    super(1, tag.toUpperCase());
+    this.tagName = tag.toUpperCase();
+    this.type = this.tagName === 'INPUT' ? 'text' : '';
+  }
+
+  get value() {
+    return this._value;
+  }
+  set value(v: string) {
+    this._value = String(v ?? '');
+  }
+  get checked() {
+    return this._checked;
+  }
+  set checked(v: boolean) {
+    this._checked = Boolean(v);
+  }
+  focus() {
+    fakeDoc.activeElement = this;
+  }
+  blur() {}
+}
+
+class FakeEvent {
+  type: string;
+  bubbles: boolean;
+  cancelable: boolean;
+  defaultPrevented = false;
+  cancelBubble = false;
+  target: FakeNode | null = null;
+  currentTarget: FakeNode | null = null;
+
+  constructor(type: string, opts: { bubbles?: boolean; cancelable?: boolean } = {}) {
+    this.type = type;
+    this.bubbles = Boolean(opts.bubbles);
+    this.cancelable = Boolean(opts.cancelable);
+  }
+  preventDefault() {
+    this.defaultPrevented = true;
+  }
+  stopPropagation() {
+    this.cancelBubble = true;
+  }
+}
+
+const fakeDoc = new FakeNode(9, '#document') as FakeNode & {
+  oninput: null;
+  defaultView: typeof globalThis;
+  documentElement: FakeElement;
+  body: FakeElement;
+  activeElement: FakeElement | null;
+  createElement: (tag: string) => FakeElement;
+  createElementNS: (_ns: string, tag: string) => FakeElement;
+  createTextNode: (t: string) => FakeNode;
+  createComment: (t: string) => FakeNode;
+};
+fakeDoc.oninput = null;
+fakeDoc.defaultView = globalThis;
+fakeDoc.documentElement = new FakeElement('html');
+fakeDoc.body = new FakeElement('body');
+fakeDoc.activeElement = fakeDoc.body;
+fakeDoc.appendChild(fakeDoc.documentElement);
+fakeDoc.documentElement.appendChild(fakeDoc.body);
+fakeDoc.createElement = (tag: string) => new FakeElement(tag);
+fakeDoc.createElementNS = (_ns: string, tag: string) => new FakeElement(tag);
+fakeDoc.createTextNode = (t: string) => {
+  const n = new FakeNode(3, '#text');
+  n._data = String(t);
+  return n;
+};
+fakeDoc.createComment = (t: string) => {
+  const n = new FakeNode(8, '#comment');
+  n._data = String(t);
+  return n;
+};
+
+function findElements(root: FakeNode, predicate: (el: FakeElement) => boolean): FakeElement[] {
+  const matches: FakeElement[] = [];
+  for (const child of root.childNodes) {
+    if (child instanceof FakeElement) {
+      if (predicate(child)) matches.push(child);
+      matches.push(...findElements(child, predicate));
+    }
+  }
+  return matches;
+}
+
+function clickElement(el: FakeElement) {
+  el.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true }));
+}
+
+function setInputValue(el: FakeElement, value: string) {
+  const descriptor = Object.getOwnPropertyDescriptor(FakeElement.prototype, 'value');
+  descriptor?.set?.call(el, value);
+  el.dispatchEvent(new FakeEvent('input', { bubbles: true }));
+  el.dispatchEvent(new FakeEvent('change', { bubbles: true }));
+}
+
+async function flushAsync(turns: number = 8) {
+  for (let i = 0; i < turns; i++) {
+    await Promise.resolve();
+  }
+}
+
 const sampleIdentity: RepoIdentity = {
   owner: 'facebook',
   repo: 'react',
   branch: 'main',
   commitSha: 'abc1234def56789012345678901234567890abcd',
+  pageType: 'repo_root',
+};
+
+const secondIdentity: RepoIdentity = {
+  owner: 'vercel',
+  repo: 'next.js',
+  branch: 'canary',
+  commitSha: 'def56789012345678901234567890abcdef12345',
   pageType: 'repo_root',
 };
 
@@ -37,6 +293,17 @@ const sampleIndex: RepoIndex = {
   candidateEntryPoints: ['src/index.ts'],
   prioritizedFiles: ['package.json', 'src/index.ts'],
   treeOutline: 'src/\n  index.ts\npackage.json',
+};
+
+const secondIndex: RepoIndex = {
+  identity: secondIdentity,
+  defaultBranch: 'canary',
+  commitSha: 'def56789012345678901234567890abcdef12345',
+  languages: ['TypeScript'],
+  manifests: ['package.json'],
+  candidateEntryPoints: ['packages/next/src/server/next.ts'],
+  prioritizedFiles: ['package.json', 'packages/next/src/server/next.ts'],
+  treeOutline: 'packages/\n  next/\npackage.json',
 };
 
 const sampleOverview: OverviewOutput = {
@@ -159,6 +426,77 @@ const defaultSettings: UserSettings = {
 };
 
 describe('Sidepanel App & Components', () => {
+  let createRootFn: (container: Element) => Root;
+  const windowListeners = new Map<string, Set<(evt: FakeEvent) => void>>();
+
+  beforeAll(async () => {
+    Object.assign(globalThis, {
+      window: globalThis,
+      document: fakeDoc,
+      IS_REACT_ACT_ENVIRONMENT: true,
+      HTMLElement: FakeElement,
+      HTMLInputElement: FakeElement,
+      HTMLTextAreaElement: FakeElement,
+      HTMLIFrameElement: class {},
+      Node: FakeNode,
+      Event: FakeEvent,
+      addEventListener: (type: string, fn: (evt: FakeEvent) => void) => {
+        const set = windowListeners.get(type) ?? new Set();
+        set.add(fn);
+        windowListeners.set(type, set);
+      },
+      removeEventListener: (type: string, fn: (evt: FakeEvent) => void) => {
+        windowListeners.get(type)?.delete(fn);
+      },
+    });
+    const client = await import('react-dom/client');
+    createRootFn = client.createRoot;
+  });
+
+  afterAll(() => {
+    windowListeners.clear();
+    delete (globalThis as Record<string, unknown>).window;
+    delete (globalThis as Record<string, unknown>).document;
+    delete (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT;
+    delete (globalThis as Record<string, unknown>).addEventListener;
+    delete (globalThis as Record<string, unknown>).removeEventListener;
+  });
+
+  beforeEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await new RepoCache().clear();
+    await new SettingsStore().clearSettings();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    fakeDoc.body.childNodes = [];
+  });
+
+  function mount(node: React.ReactElement) {
+    const container = fakeDoc.createElement('div');
+    fakeDoc.body.appendChild(container);
+    const root = createRootFn(container as unknown as Element);
+    act(() => {
+      root.render(node);
+    });
+    return {
+      container,
+      rerender: (next: React.ReactElement) => {
+        act(() => {
+          root.render(next);
+        });
+      },
+      unmount: () => {
+        act(() => {
+          root.unmount();
+        });
+      },
+    };
+  }
+
   it('renders Header and empty state when no repo is detected', () => {
     const html = renderToString(<App initialIdentity={null} />);
     expect(html).toContain('RepoLens');
@@ -386,5 +724,345 @@ describe('Sidepanel App & Components', () => {
     expect(sanitizeExternalUrl('https://github.com/facebook/react')).toBe(
       'https://github.com/facebook/react'
     );
+  });
+
+  it('switches between all five tabs interactively on click', () => {
+    const { container, unmount } = mount(
+      <App
+        initialIdentity={sampleIdentity}
+        initialStatus="ready"
+        initialIndex={sampleIndex}
+        initialOverview={sampleOverview}
+        initialArchitecture={sampleArchitecture}
+        initialExplorer={sampleExplorer}
+      />
+    );
+
+    expect(container.textContent).toContain('Project Purpose');
+
+    const findTab = (ariaLabel: string) =>
+      findElements(
+        container,
+        (el) => el.getAttribute('role') === 'tab' && el.getAttribute('aria-label') === ariaLabel
+      )[0];
+
+    act(() => clickElement(findTab('Architecture')));
+    expect(container.textContent).toContain('Component-Based Fiber Architecture');
+    expect(container.textContent).toContain('Fiber Reconciler');
+
+    act(() => clickElement(findTab('Codebase Explorer')));
+    expect(container.textContent).toContain('packages/react-reconciler');
+    expect(container.textContent).toContain('Core fiber reconciliation engine');
+
+    act(() => clickElement(findTab('Execution Flow')));
+    expect(container.textContent).toContain('Create Root Container');
+
+    act(() => clickElement(findTab('Ask Repository')));
+    expect(container.textContent).toContain('How do I run this locally?');
+
+    unmount();
+  });
+
+  it('toggles Settings modal, switches provider, and persists updated settings on Save', async () => {
+    const { container, unmount } = mount(<App initialIdentity={sampleIdentity} />);
+
+    await act(async () => {
+      await flushAsync();
+    });
+
+    const settingsBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.getAttribute('aria-label') === 'Settings'
+    )[0];
+    expect(settingsBtn).toBeDefined();
+
+    act(() => clickElement(settingsBtn));
+    expect(container.textContent).toContain('RepoLens Settings');
+
+    const cancelBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.trim() === 'Cancel'
+    )[0];
+    act(() => clickElement(cancelBtn));
+    expect(container.textContent).not.toContain('RepoLens Settings');
+
+    // Reopen, choose OpenAI, set API key, and submit
+    act(() => clickElement(settingsBtn));
+    const openaiBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('OpenAI')
+    )[0];
+    act(() => clickElement(openaiBtn));
+
+    const openaiKeyInput = findElements(
+      container,
+      (el) => el.getAttribute('id') === 'openai-key-input'
+    )[0];
+    act(() => setInputValue(openaiKeyInput, 'sk-interactive-test'));
+
+    const form = findElements(container, (el) => el.tagName === 'FORM')[0];
+    await act(async () => {
+      form.dispatchEvent(new FakeEvent('submit', { bubbles: true, cancelable: true }));
+      await flushAsync();
+    });
+
+    expect(container.textContent).not.toContain('RepoLens Settings');
+    expect(container.textContent).toContain('OpenAI');
+
+    const saved = await new SettingsStore().getSettings();
+    expect(saved.aiProvider).toBe('openai');
+    expect(saved.openaiApiKey).toBe('sk-interactive-test');
+
+    unmount();
+  });
+
+  it('shows Configure API Key warning when Analyze is clicked without an API key, and surfaces RateLimitError when GitHub hits 403', async () => {
+    const { container, unmount } = mount(<App initialIdentity={sampleIdentity} />);
+
+    await act(async () => {
+      await flushAsync();
+    });
+
+    const analyzeBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('Analyze')
+    )[0];
+    act(() => clickElement(analyzeBtn));
+    expect(container.textContent).toContain('AI API Key Required');
+    expect(container.textContent).toContain('Configure API Key');
+    unmount();
+
+    // Now configure API key and mock GitHub API returning 403 rate limit during file fetch
+    await new SettingsStore().saveSettings({
+      aiProvider: 'gemini',
+      geminiApiKey: 'test-gemini-key',
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/repos/facebook/react')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            owner: { login: 'facebook' },
+            name: 'react',
+            default_branch: 'main',
+            description: null,
+            private: false,
+            language: 'JavaScript',
+          }),
+        };
+      }
+      if (url.includes('/git/trees/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            sha: 'tree1234',
+            truncated: false,
+            tree: [
+              { path: 'README.md', mode: '100644', type: 'blob', sha: 's1' },
+              { path: 'package.json', mode: '100644', type: 'blob', sha: 's2' },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: false,
+        status: 403,
+        headers: new Headers({
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': '1700003600',
+        }),
+        json: async () => ({ message: 'API rate limit exceeded' }),
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mounted = mount(<App initialIdentity={sampleIdentity} />);
+    await act(async () => {
+      await flushAsync();
+    });
+
+    const analyzeBtn2 = findElements(
+      mounted.container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('Analyze')
+    )[0];
+
+    await act(async () => {
+      clickElement(analyzeBtn2);
+      await flushAsync(15);
+    });
+
+    expect(mounted.container.textContent).toContain('GitHub API rate limit exceeded');
+    expect(mounted.container.textContent).toContain('Add GitHub Token');
+    mounted.unmount();
+  });
+
+  it('fetchBoundedContents rethrows RateLimitError instead of swallowing rejected promises', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('README.md')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            text: async () => '# Hello',
+          };
+        }
+        return {
+          ok: false,
+          status: 403,
+          headers: new Headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700003600' }),
+          json: async () => ({ message: 'API rate limit exceeded' }),
+        };
+      })
+    );
+
+    const client = new GitHubClient();
+    await expect(
+      fetchBoundedContents(client, 'facebook', 'react', ['README.md', 'package.json'], 'main')
+    ).rejects.toThrowError(RateLimitError);
+  });
+
+  it('hydrates repoIndex when loading cached commit analysis so Q&A and Tree Outline work immediately', async () => {
+    const cache = new RepoCache();
+    await cache.set('facebook', 'react', sampleIdentity.commitSha!, {
+      overview: sampleOverview,
+      architecture: sampleArchitecture,
+      explorer: sampleExplorer,
+    });
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        lastError: undefined,
+        sendMessage: vi.fn((_msg: unknown, cb?: (res: { repo: RepoIdentity | null }) => void) => {
+          cb?.({ repo: sampleIdentity });
+        }),
+        onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
+      tabs: {
+        onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+        onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
+    });
+
+    const { container, unmount } = mount(<App />);
+    await act(async () => {
+      await flushAsync(12);
+    });
+
+    expect(container.textContent).toContain('cached');
+    expect(container.textContent).toContain('A declarative library for building user interfaces.');
+
+    // Switch to Explorer tab and verify reconstructed treeOutline is available
+    const explorerTab = findElements(
+      container,
+      (el) => el.getAttribute('role') === 'tab' && el.getAttribute('aria-label') === 'Codebase Explorer'
+    )[0];
+    act(() => clickElement(explorerTab));
+
+    const outlineBtn = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('Tree Outline')
+    )[0];
+    expect(outlineBtn).toBeDefined();
+    act(() => clickElement(outlineBtn));
+    expect(container.textContent).toContain('package.json');
+
+    // Switch to Ask AI tab and verify Q&A controls are enabled
+    const askTab = findElements(
+      container,
+      (el) => el.getAttribute('role') === 'tab' && el.getAttribute('aria-label') === 'Ask Repository'
+    )[0];
+    act(() => clickElement(askTab));
+
+    const textarea = findElements(container, (el) => el.tagName === 'TEXTAREA')[0];
+    expect(textarea).toBeDefined();
+    expect(textarea.disabled).toBe(false);
+    expect(container.textContent).not.toContain('Analyze this repository first');
+
+    const rebuilt = buildCachedRepoIndex(sampleIdentity, {
+      commitSha: sampleIdentity.commitSha!,
+      timestamp: Date.now(),
+      overview: sampleOverview,
+      architecture: sampleArchitecture,
+      explorer: sampleExplorer,
+    });
+    expect(rebuilt.prioritizedFiles).toContain('package.json');
+    expect(rebuilt.treeOutline).toContain('packages/');
+
+    unmount();
+  });
+
+  it('resets local chat state and discards in-flight stream responses when switching repositories in AskRepositoryTab', async () => {
+    let resolveDeferredFetch!: (res: unknown) => void;
+    const deferredPromise = new Promise((resolve) => {
+      resolveDeferredFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(() => deferredPromise));
+
+    let activeMessages: ChatMessage[] = [];
+    const onMessagesChange = vi.fn((next: ChatMessage[]) => {
+      activeMessages = next;
+    });
+
+    const { container, rerender, unmount } = mount(
+      <AskRepositoryTab
+        repoIndex={sampleIndex}
+        overview={sampleOverview}
+        architecture={sampleArchitecture}
+        settings={{ ...defaultSettings, geminiApiKey: 'test-key' }}
+        gitRef="main"
+        onOpenSettings={() => {}}
+        messages={activeMessages}
+        onMessagesChange={onMessagesChange}
+      />
+    );
+
+    const chip = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('What are the entry points?')
+    )[0];
+    act(() => clickElement(chip));
+    expect(container.textContent).toContain('Thinking...');
+    expect(onMessagesChange).toHaveBeenCalledTimes(1);
+
+    // Navigate to Repo B while Repo A's stream is still pending
+    activeMessages = [];
+    rerender(
+      <AskRepositoryTab
+        repoIndex={secondIndex}
+        overview={null}
+        architecture={null}
+        settings={{ ...defaultSettings, geminiApiKey: 'test-key' }}
+        gitRef="canary"
+        onOpenSettings={() => {}}
+        messages={activeMessages}
+        onMessagesChange={onMessagesChange}
+      />
+    );
+
+    expect(container.textContent).not.toContain('Thinking...');
+
+    // Now resolve Repo A's stream response; it must NOT overwrite Repo B's state
+    await act(async () => {
+      resolveDeferredFetch({
+        ok: true,
+        status: 200,
+        text: async () =>
+          'data: {"candidates":[{"content":{"parts":[{"text":"Stale answer for React"}]}}]}\n',
+      });
+      await flushAsync(10);
+    });
+
+    expect(container.textContent).not.toContain('Stale answer for React');
+    expect(onMessagesChange).toHaveBeenCalledTimes(1);
+    expect(activeMessages).toEqual([]);
+
+    unmount();
   });
 });
