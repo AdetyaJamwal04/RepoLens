@@ -168,8 +168,11 @@ export const EXPLORER_SCHEMA = {
   required: ['entries'],
 };
 
-function wrapRepositoryData(content: string): string {
-  return `<repository_data>\n${content}\n</repository_data>`;
+function wrapRepositoryData(rawContent: string): string {
+  const sanitized = rawContent
+    .replace(/<\/repository_data>/gi, '&lt;/repository_data&gt;')
+    .replace(/<repository_data>/gi, '&lt;repository_data&gt;');
+  return `<repository_data>\n${sanitized}\n</repository_data>`;
 }
 
 export class AnalysisEngine {
@@ -219,14 +222,14 @@ export class AnalysisEngine {
     const repoContext = [
       `Repository: ${index.identity.owner}/${index.identity.repo}`,
       `Commit: ${index.commitSha}`,
+      `Overview Summary: ${overview.purpose}`,
+      `Identified Technologies: ${overview.technologies.map(t => t.name).join(', ')}`,
       `File Tree Outline:\n${index.treeOutline}`,
       `Candidate Entry Points & Source Code:\n${formattedEntries}`,
     ].join('\n\n');
 
     const prompt = [
       'Analyze the application architecture, component dependencies, and runtime execution flow based on repository evidence.',
-      `Overview Summary: ${overview.purpose}`,
-      `Identified Technologies: ${overview.technologies.map(t => t.name).join(', ')}`,
       wrapRepositoryData(repoContext),
       `Derive the execution flow steps with source citations referencing commit SHA "${index.commitSha}".`,
     ].join('\n\n');
@@ -245,14 +248,14 @@ export class AnalysisEngine {
     const repoContext = [
       `Repository: ${index.identity.owner}/${index.identity.repo}`,
       `Commit: ${index.commitSha}`,
+      `Architectural Pattern: ${architecture.pattern}`,
+      `Components: ${architecture.components.map(c => `${c.name}: ${c.responsibility}`).join('; ')}`,
       `Prioritized Files:\n${index.prioritizedFiles.join('\n')}`,
       `File Tree Outline:\n${index.treeOutline}`,
     ].join('\n\n');
 
     const prompt = [
       'Generate codebase explorer directory and file explanations for the repository.',
-      `Architectural Pattern: ${architecture.pattern}`,
-      `Components: ${architecture.components.map(c => `${c.name}: ${c.responsibility}`).join('; ')}`,
       wrapRepositoryData(repoContext),
       'Explain the responsibility and significance (critical, important, supporting) of each key file and directory.',
     ].join('\n\n');
