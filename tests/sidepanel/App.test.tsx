@@ -428,8 +428,29 @@ const defaultSettings: UserSettings = {
 describe('Sidepanel App & Components', () => {
   let createRootFn: (container: Element) => Root;
   const windowListeners = new Map<string, Set<(evt: FakeEvent) => void>>();
+  const globalKeys = [
+    'window',
+    'document',
+    'IS_REACT_ACT_ENVIRONMENT',
+    'HTMLElement',
+    'HTMLInputElement',
+    'HTMLTextAreaElement',
+    'HTMLIFrameElement',
+    'Node',
+    'Event',
+    'addEventListener',
+    'removeEventListener',
+  ] as const;
+  const previousGlobals = new Map<string, { had: boolean; value: unknown }>();
 
   beforeAll(async () => {
+    for (const key of globalKeys) {
+      previousGlobals.set(key, {
+        had: Object.prototype.hasOwnProperty.call(globalThis, key),
+        value: (globalThis as Record<string, unknown>)[key],
+      });
+    }
+
     Object.assign(globalThis, {
       window: globalThis,
       document: fakeDoc,
@@ -455,11 +476,14 @@ describe('Sidepanel App & Components', () => {
 
   afterAll(() => {
     windowListeners.clear();
-    delete (globalThis as Record<string, unknown>).window;
-    delete (globalThis as Record<string, unknown>).document;
-    delete (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT;
-    delete (globalThis as Record<string, unknown>).addEventListener;
-    delete (globalThis as Record<string, unknown>).removeEventListener;
+    for (const key of globalKeys) {
+      const prev = previousGlobals.get(key);
+      if (prev?.had) {
+        (globalThis as Record<string, unknown>)[key] = prev.value;
+      } else {
+        delete (globalThis as Record<string, unknown>)[key];
+      }
+    }
   });
 
   beforeEach(async () => {
@@ -1060,6 +1084,73 @@ describe('Sidepanel App & Components', () => {
     });
 
     expect(container.textContent).not.toContain('Stale answer for React');
+    expect(onMessagesChange).toHaveBeenCalledTimes(1);
+    expect(activeMessages).toEqual([]);
+
+    unmount();
+  });
+
+  it('discards in-flight stream responses when AskRepositoryTab unmounts due to key change on repo switch', async () => {
+    let resolveDeferredFetch!: (res: unknown) => void;
+    const deferredPromise = new Promise((resolve) => {
+      resolveDeferredFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(() => deferredPromise));
+
+    let activeMessages: ChatMessage[] = [];
+    const onMessagesChange = vi.fn((next: ChatMessage[]) => {
+      activeMessages = next;
+    });
+
+    const { container, rerender, unmount } = mount(
+      <AskRepositoryTab
+        key="facebook/react:abc1234"
+        repoIndex={sampleIndex}
+        overview={sampleOverview}
+        architecture={sampleArchitecture}
+        settings={{ ...defaultSettings, geminiApiKey: 'test-key' }}
+        gitRef="main"
+        onOpenSettings={() => {}}
+        messages={activeMessages}
+        onMessagesChange={onMessagesChange}
+      />
+    );
+
+    const chip = findElements(
+      container,
+      (el) => el.tagName === 'BUTTON' && el.textContent.includes('What are the entry points?')
+    )[0];
+    act(() => clickElement(chip));
+    expect(container.textContent).toContain('Thinking...');
+    expect(onMessagesChange).toHaveBeenCalledTimes(1);
+
+    // Unmount Repo A's AskRepositoryTab and mount Repo B's via key change
+    activeMessages = [];
+    rerender(
+      <AskRepositoryTab
+        key="vercel/next.js:def5678"
+        repoIndex={secondIndex}
+        overview={null}
+        architecture={null}
+        settings={{ ...defaultSettings, geminiApiKey: 'test-key' }}
+        gitRef="canary"
+        onOpenSettings={() => {}}
+        messages={activeMessages}
+        onMessagesChange={onMessagesChange}
+      />
+    );
+
+    await act(async () => {
+      resolveDeferredFetch({
+        ok: true,
+        status: 200,
+        text: async () =>
+          'data: {"candidates":[{"content":{"parts":[{"text":"Unmounted stale stream"}]}}]}\n',
+      });
+      await flushAsync(10);
+    });
+
+    expect(container.textContent).not.toContain('Unmounted stale stream');
     expect(onMessagesChange).toHaveBeenCalledTimes(1);
     expect(activeMessages).toEqual([]);
 

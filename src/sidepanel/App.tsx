@@ -752,19 +752,26 @@ export function App({
               />
             )}
 
-            {activeTab === 'ask' && (
-              <AskRepositoryTab
-                key={formatRepoKey(identity)}
-                repoIndex={repoIndex}
-                overview={overview}
-                architecture={architecture}
-                settings={settings}
-                gitRef={githubLinkRef}
-                onOpenSettings={() => setIsSettingsOpen(true)}
-                messages={chatMessages}
-                onMessagesChange={setChatMessages}
-              />
-            )}
+            {activeTab === 'ask' && (() => {
+              const currentKey = formatRepoKey(identity);
+              return (
+                <AskRepositoryTab
+                  key={currentKey}
+                  repoIndex={repoIndex}
+                  overview={overview}
+                  architecture={architecture}
+                  settings={settings}
+                  gitRef={githubLinkRef}
+                  onOpenSettings={() => setIsSettingsOpen(true)}
+                  messages={chatMessages}
+                  onMessagesChange={(next) => {
+                    if (lastRepoKeyRef.current === currentKey) {
+                      setChatMessages(next);
+                    }
+                  }}
+                />
+              );
+            })()}
           </main>
         </>
       )}

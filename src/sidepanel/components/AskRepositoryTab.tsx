@@ -82,6 +82,12 @@ export const AskRepositoryTab: React.FC<AskRepositoryTabProps> = ({
     }
   }, [repoKey]);
 
+  useEffect(() => {
+    return () => {
+      streamRunIdRef.current += 1;
+    };
+  }, []);
+
   const activeApiKey =
     settings.aiProvider === 'openai' ? settings.openaiApiKey : settings.geminiApiKey;
   const hasApiKey = Boolean(activeApiKey && activeApiKey.trim().length > 0);
