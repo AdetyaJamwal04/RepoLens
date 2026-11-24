@@ -11,6 +11,8 @@ describe('Extension Build Output', () => {
     expect(manifest.side_panel?.default_path).toBe('sidepanel/index.html');
     expect(existsSync(resolve(dist, 'background.js'))).toBe(true);
     expect(existsSync(resolve(dist, 'content.js'))).toBe(true);
+    const contentJs = readFileSync(resolve(dist, 'content.js'), 'utf-8');
+    expect(contentJs).not.toMatch(/^\s*import\s/m);
     expect(existsSync(resolve(dist, 'sidepanel/index.html'))).toBe(true);
   });
 });

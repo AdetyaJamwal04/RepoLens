@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import { readFileSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'fs';
+import { buildSync } from 'esbuild';
 
 export default defineConfig({
   plugins: [
@@ -27,6 +28,16 @@ export default defineConfig({
           copyFileSync(srcSidepanelHtml, targetHtml);
           rmSync(resolve(__dirname, 'dist/src'), { recursive: true, force: true });
         }
+
+        // Bundle content script as a standalone IIFE classic script (no ES module imports)
+        buildSync({
+          entryPoints: [resolve(__dirname, 'src/content/index.ts')],
+          outfile: resolve(__dirname, 'dist/content.js'),
+          bundle: true,
+          format: 'iife',
+          platform: 'browser',
+          target: 'es2020',
+        });
       },
     },
   ],
@@ -37,11 +48,10 @@ export default defineConfig({
       input: {
         sidepanel: resolve(__dirname, 'src/sidepanel/index.html'),
         background: resolve(__dirname, 'src/background/index.ts'),
-        content: resolve(__dirname, 'src/content/index.ts'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'background' || chunkInfo.name === 'content') {
+          if (chunkInfo.name === 'background') {
             return '[name].js';
           }
           return 'assets/[name]-[hash].js';
